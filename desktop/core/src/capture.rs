@@ -22,6 +22,9 @@ pub struct Outcome {
     pub release: Option<String>,
     /// Something went wrong with one part but the rest was done.
     pub warnings: Vec<String>,
+    /// What a job that isn't a check did, in words (an account's projects queued).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// Limits from the library's settings.
@@ -149,7 +152,7 @@ pub fn capture_tag(repo: &mut Repo, folder: &Path, tag: &str, src: &dyn Source, 
     if tag.is_some() {
         repo.last_changed = now_iso();
     }
-    Ok(Outcome { snapshot: None, release: tag, warnings: vec![] })
+    Ok(Outcome { release: tag, ..Default::default() })
 }
 
 /// How many of a project's releases the app asks the server for.

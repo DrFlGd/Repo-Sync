@@ -5,9 +5,12 @@
 //! Adding another kind of server means one more file here (docs/PLAN.md,
 //! "Sources").
 
+mod account;
 mod gitea;
 mod github;
 mod gitlab;
+
+pub use account::{parse_account, projects, Account, Listed};
 
 use crate::http::{Client, Header};
 use anyhow::{bail, Result};
@@ -133,7 +136,7 @@ pub fn parse_url(input: &str) -> Result<Parsed> {
     Ok(Parsed { kind, host, path: segs.join("/") })
 }
 
-fn kind_of_host(host: &str) -> Option<Kind> {
+pub(crate) fn kind_of_host(host: &str) -> Option<Kind> {
     let first = host.split('.').next().unwrap_or("");
     match host {
         "github.com" => Some(Kind::GitHub),
@@ -227,15 +230,28 @@ fn api_base(host: &str, default: String) -> String {
     default
 }
 
+/// The API address of a kind of server on `host`.
+fn api_of(kind: Kind, host: &str) -> String {
+    let default = match kind {
+        Kind::GitHub if host == "github.com" => "https://api.github.com".to_string(),
+        Kind::GitHub => format!("https://{host}/api/v3"),
+        Kind::GitLab => format!("https://{host}/api/v4"),
+        Kind::Gitea => format!("https://{host}/api/v1"),
+    };
+    api_base(host, default)
+}
+
+fn token_for(tokens: &Tokens, host: &str) -> Option<String> {
+    tokens.get(host).filter(|t| !t.trim().is_empty()).map(|t| t.trim().to_string())
+}
+
 pub fn open(r: &SourceRef, tokens: &Tokens, client: Arc<Client>) -> Box<dyn Source> {
-    let token = tokens.get(&r.host).filter(|t| !t.trim().is_empty()).map(|t| t.trim().to_string());
+    let token = token_for(tokens, &r.host);
+    let api = api_of(r.kind, &r.host);
     match r.kind {
-        Kind::GitHub => {
-            let default = if r.host == "github.com" { "https://api.github.com".to_string() } else { format!("https://{}/api/v3", r.host) };
-            Box::new(github::GitHub::new(r.clone(), api_base(&r.host, default), token, client))
-        }
-        Kind::GitLab => Box::new(gitlab::GitLab::new(r.clone(), api_base(&r.host, format!("https://{}/api/v4", r.host)), token, client)),
-        Kind::Gitea => Box::new(gitea::Gitea::new(r.clone(), api_base(&r.host, format!("https://{}/api/v1", r.host)), token, client)),
+        Kind::GitHub => Box::new(github::GitHub::new(r.clone(), api, token, client)),
+        Kind::GitLab => Box::new(gitlab::GitLab::new(r.clone(), api, token, client)),
+        Kind::Gitea => Box::new(gitea::Gitea::new(r.clone(), api, token, client)),
     }
 }
 

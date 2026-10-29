@@ -342,6 +342,36 @@ try:
         page.goto(BASE + "/#/")
         wait_for(lambda: page.locator(".card").count() == 1, "the first library opens again with its project")
 
+        # ---- every project of an account ---------------------------------------------
+        for n in ("alpha", "beta", "old-fork"):
+            make_project("crew", n, f"# {n}\n")
+        api = lambda cmd, args: page.evaluate(f"window.__reposync.ctx().api('{cmd}', {json.dumps(args)})")
+        idle = lambda: page.evaluate("window.__reposync.ctx().api('jobs').then((j) => j.current === null && j.queued.length === 0)")
+        page.keyboard.press("n")
+        page.wait_for_selector("#add-links")
+        page.fill("#add-links", "https://github.com/crew")
+        page.wait_for_selector(".checks li")
+        check("every project of this GitHub account" in page.inner_text(".checks"), "a link to a user is read as an account")
+        check(page.is_checked("#add-watch") and not page.is_checked("#add-forks"), "an account is followed, and its forks left out, unless asked")
+        page.screenshot(path=str(a.out / "08b-account.png"))
+        page.click("#add-go")
+        wait_for(lambda: (lib / "github.com/crew/alpha/repo.json").is_file() and (lib / "github.com/crew/beta/repo.json").is_file(), "every project of the account is added", 60)
+        wait_for(idle, "adding the account's projects finishes", 60)
+        check(not (lib / "github.com/crew/old-fork").exists(), "its forks are left out")
+        accounts = json.loads((lib / "_library/accounts.json").read_text())["accounts"]
+        check([x["name"] for x in accounts] == ["crew"], "the account is followed")
+        make_project("crew", "gamma", "# gamma\n")
+        api("remove", {"id": "github.com/crew/beta"})
+        api("check_all", {})
+        wait_for(lambda: (lib / "github.com/crew/gamma/repo.json").is_file(), "a followed account's new project is added at the next check", 60)
+        wait_for(idle, "the checks finish", 60)
+        check(not (lib / "github.com/crew/beta").exists(), "a project removed by hand isn't added back")
+        page.goto(BASE + "/#/settings")
+        page.wait_for_selector("#accounts [data-account='github.com/crew']")
+        page.click("#accounts >> text=Stop following")
+        wait_for(lambda: page.locator("#accounts [data-account]").count() == 0, "an account can be unfollowed")
+        page.goto(BASE + "/#/")
+
         # ---- dark, narrow, errors --------------------------------------------------------
         page.click("#theme-toggle")
         page.click("#theme-toggle")

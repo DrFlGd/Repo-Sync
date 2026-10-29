@@ -7,8 +7,13 @@ import { Icon } from "./icons.js";
 import { checkAll } from "./actions.js";
 import { bytes, ago, when } from "../lib/format.js";
 
-const project = (repo) => html`<a href=${`#/repo/${repo}`}>${repo.split("/").slice(1).join("/")}</a>`;
-const what = (j) => (j.type === "add" ? "Adding" : j.by === "schedule" ? "Scheduled check" : "Check");
+const project = (repo) => repo.startsWith("account:")
+  ? html`<span>${repo.slice(8)}</span>`
+  : html`<a href=${`#/repo/${repo}`}>${repo.split("/").slice(1).join("/")}</a>`;
+const what = (j) => (j.type === "add" ? "Adding"
+  : j.type === "account" ? (j.by === "schedule" ? "New projects of" : "Projects of")
+  : j.type === "release" ? `Release ${j.tag}`
+  : j.by === "schedule" ? "Scheduled check" : "Check");
 
 async function stop(job) {
   try { await api("job_stop", { job }); poke(); } catch (e) { toast(errText(e), 6000); }
@@ -37,7 +42,7 @@ export function ActivityPage() {
       <h2 class="section-head">Finished <span class="n">${jobs.recent?.length || 0}</span></h2>
       ${jobs.recent?.length ? html`<ul class="log" id="finished">${jobs.recent.map((f) => html`<li key=${f.job.id}>
         <span class="t" title=${when(f.finished)}>${ago(f.finished)}<br />${what(f.job)}</span>
-        <span>${project(f.job.repo)}<br /><span class=${!f.ok ? "err" : f.outcome && (f.outcome.snapshot || f.outcome.release) ? "new" : "muted"}>${f.message}</span></span>
+        <span>${project(f.job.repo)}<br /><span class=${!f.ok ? "err" : f.outcome && (f.outcome.snapshot || f.outcome.release || f.outcome.note?.includes(" to add")) ? "new" : "muted"}>${f.message}</span></span>
       </li>`)}</ul>` : html`<p class="muted">Nothing has been checked since the app started.</p>`}
     </div>`;
 }

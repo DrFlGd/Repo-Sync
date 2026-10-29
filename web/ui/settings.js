@@ -23,6 +23,24 @@ function Token({ host, label, set: isSet, onSaved }) {
   </div>`;
 }
 
+// Accounts followed for their new projects (added from a link to a user or organisation).
+function Accounts() {
+  const [list, setList] = useState(null);
+  const load = () => api("accounts").then(setList).catch(() => setList([]));
+  useEffect(() => { load(); }, []);
+  const stop = async (id) => {
+    try { await api("account_remove", { id }); load(); toast(`No longer following ${id}`); } catch (e) { toast(errText(e), 6000); }
+  };
+  return html`<section><h2 class="section-head">Followed accounts</h2><div class="panel" id="accounts">
+    <p class="hint">Add a link to a user or organisation (like https://github.com/someone) to add all of their projects. A followed account's new projects are added at each scheduled check. Projects you remove aren't added back.</p>
+    ${!list ? null : !list.length ? html`<p class="muted">No account is followed.</p>`
+      : list.map((a) => html`<div class="row" key=${a.id} data-account=${a.id}>
+        <a class="mono" style="flex:1" href=${a.web_url}>${a.id}</a>
+        <span class="muted">${a.last_checked ? `looked ${ago(a.last_checked)}` : ""}</span>
+        <button type="button" class="small ghost" onClick=${() => stop(a.id)}>Stop following</button></div>`)}
+  </div></section>`;
+}
+
 export function SettingsPage() {
   const info = useStore(ui, (s) => s.info);
   const theme = useStore(ui, (s) => s.theme);
@@ -75,6 +93,7 @@ export function SettingsPage() {
         <p class="hint">Without a token GitHub allows 60 requests an hour (a check takes 3 or 4), and private projects can't be reached. A token with read access raises that to 5,000. Tokens stay on this computer, never in the library.</p>
         ${HOSTS.map(([h, l]) => html`<${Token} key=${h} host=${h} label=${l} set=${!!s.tokens[h]} onSaved=${load} />`)}
       </div></section>`}
+      ${s && html`<${Accounts} />`}
       <section><h2 class="section-head">Appearance</h2><div class="panel">
         <label class="field"><span>Theme</span>
           <select id="theme" value=${theme} onChange=${(e) => setPref({ theme: e.target.value })}>

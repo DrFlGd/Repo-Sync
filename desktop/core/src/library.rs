@@ -5,7 +5,7 @@
 //! app shows comes from these files, so a library can be copied, synced or
 //! opened on another computer (docs/PLAN.md, "The library folder").
 
-use crate::sources::{Details, SourceRef};
+use crate::sources::{Account, Details, SourceRef};
 use crate::util::{now_iso, read_json_object, write_json};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -187,6 +187,25 @@ impl Default for Settings {
     }
 }
 
+/// An account whose new projects are added at each check (_library/accounts.json).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FollowedAccount {
+    #[serde(flatten)]
+    pub account: Account,
+    /// What its projects follow when they're added.
+    pub follow: Follow,
+    /// Whether its forks of other projects are added too.
+    #[serde(default)]
+    pub forks: bool,
+    #[serde(default)]
+    pub added: String,
+    #[serde(default)]
+    pub last_checked: String,
+    /// Its projects removed from the library by hand, which aren't added again.
+    #[serde(default)]
+    pub removed: Vec<String>,
+}
+
 pub struct Library {
     pub root: PathBuf,
     pub id: String,
@@ -265,6 +284,19 @@ impl Library {
             p.push(part);
         }
         p
+    }
+
+    fn accounts_file(&self) -> PathBuf {
+        self.root.join(META_DIR).join("accounts.json")
+    }
+
+    /// The accounts followed for new projects.
+    pub fn accounts(&self) -> Vec<FollowedAccount> {
+        std::fs::read(self.accounts_file()).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()).and_then(|v| serde_json::from_value(v["accounts"].clone()).ok()).unwrap_or_default()
+    }
+
+    pub fn save_accounts(&self, list: &[FollowedAccount]) -> Result<()> {
+        write_json(&self.accounts_file(), &json!({ "accounts": list }))
     }
 
     pub fn save_repo(&self, r: &Repo) -> Result<()> {

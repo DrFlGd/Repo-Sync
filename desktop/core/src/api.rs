@@ -7,9 +7,9 @@ use crate::capture::{self, Limits, Outcome};
 use crate::config::{AppConfig, Prefs};
 use crate::http::{Client, Progress};
 use crate::launch;
-use crate::library::{Follow, Library, Repo, Settings};
+use crate::library::{Follow, FollowedAccount, Library, Repo, Settings};
 use crate::readme;
-use crate::sources::{self, Kind};
+use crate::sources::{self, Account, Kind};
 use crate::util::{now_iso, now_unix, percent_encode, unix_from_iso};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -35,6 +35,9 @@ pub enum JobKind {
         #[serde(rename = "project")]
         id: String,
     },
+    /// List an account's projects and queue the ones not in the library yet;
+    /// `watch` follows the account so its new projects are added at each check.
+    Account { account: Account, follow: Follow, forks: bool, watch: bool },
     /// Download one release the user picked (Releases, "Keep").
     Release {
         #[serde(rename = "project")]
@@ -199,7 +202,8 @@ impl App {
             }
             "check_all" => {
                 let ids: Vec<String> = self.with_lib(|l| Ok(l.repos.keys().cloned().collect()))?;
-                let n = ids.iter().filter_map(|id| self.enqueue(JobKind::Check { id: id.clone() }, id.clone(), "you")).count();
+                let mut n = ids.iter().filter_map(|id| self.enqueue(JobKind::Check { id: id.clone() }, id.clone(), "you")).count();
+                n += self.accounts_due(true).into_iter().filter_map(|a| self.enqueue_account(a, "you")).count();
                 Ok(json!({ "queued": n }))
             }
             "follow_set" => {
@@ -228,6 +232,16 @@ impl App {
                 })
             }
             "releases_available" => self.releases_available(&id()?),
+            "accounts" => self.with_lib(|l| Ok(json!(l.accounts().iter().map(|a| json!({ "id": a.account.id(), "kind": a.account.kind.label(), "web_url": a.account.web_url(), "forks": a.forks, "added": a.added, "last_checked": a.last_checked })).collect::<Vec<_>>()))),
+            "account_remove" => {
+                let id = id()?;
+                self.with_lib(|l| {
+                    let mut all = l.accounts();
+                    all.retain(|a| a.account.id() != id);
+                    l.save_accounts(&all)?;
+                    Ok(json!(true))
+                })
+            }
             "release_get" => {
                 let id = id()?;
                 let tag = a["tag"].as_str().filter(|t| !t.is_empty()).context("no release given")?.to_string();
@@ -468,6 +482,13 @@ impl App {
     fn link_check(&self, input: &str) -> Result<Value> {
         let mut out = vec![];
         for line in input.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            if sources::parse_url(line).is_err() {
+                if let Some(acc) = sources::parse_account(line) {
+                    let following = self.with_lib(|l| Ok(l.accounts().iter().any(|a| a.account == acc))).unwrap_or(false);
+                    out.push(json!({ "input": line, "ok": true, "account": { "id": acc.id(), "name": acc.name, "host": acc.host, "kind": acc.kind.label() }, "following": following }));
+                    continue;
+                }
+            }
             out.push(match sources::parse_url(line) {
                 Ok(p) => {
                     let id = format!("{}/{}", p.host, p.path);
@@ -494,8 +515,17 @@ impl App {
         } else {
             self.with_lib(|l| Ok(l.settings.new_follow.clone()))?
         };
+        let forks = a["forks"].as_bool().unwrap_or(false);
+        let watch = a["watch"].as_bool().unwrap_or(true);
         let mut out = vec![];
         for input in inputs {
+            if let (Err(_), Some(acc)) = (sources::parse_url(&input), sources::parse_account(&input)) {
+                let key = format!("account:{}", acc.id());
+                let id = acc.id();
+                let job = self.enqueue(JobKind::Account { account: acc, follow: follow.clone(), forks, watch }, key, "you");
+                out.push(json!({ "input": input, "account": id, "job": job }));
+                continue;
+            }
             match sources::parse_url(&input) {
                 Err(e) => out.push(json!({ "input": input, "error": e.to_string() })),
                 Ok(p) => {
@@ -529,7 +559,18 @@ impl App {
         }
         self.jobs.lock().unwrap().queue.retain(|q| q.repo != id);
         self.with_lib(|l| {
-            l.repos.remove(id).context("That project isn't in the library.")?;
+            let r = l.repos.remove(id).context("That project isn't in the library.")?;
+            // a followed account's project removed by hand isn't added back by the next check
+            let mut accounts = l.accounts();
+            let owner = format!("{}/{}", r.source.host, r.source.owner());
+            let mut changed = false;
+            for a in accounts.iter_mut().filter(|a| a.account.id().eq_ignore_ascii_case(&owner) && !a.removed.iter().any(|x| x == id)) {
+                a.removed.push(id.to_string());
+                changed = true;
+            }
+            if changed {
+                l.save_accounts(&accounts)?;
+            }
             let dir = l.folder_of(id);
             std::fs::remove_dir_all(&dir).with_context(|| format!("couldn't remove {}", dir.display()))?;
             // tidy the owner's and host's folders when they're empty now
@@ -629,6 +670,26 @@ impl App {
         Some(id)
     }
 
+    /// The followed accounts due a look for new projects (every one with `all`).
+    fn accounts_due(&self, all: bool) -> Vec<FollowedAccount> {
+        let now = now_unix();
+        match self.lib.lock().unwrap().as_ref() {
+            Some(l) => {
+                let hours = l.settings.check_every_hours;
+                l.accounts()
+                    .into_iter()
+                    .filter(|a| all || (hours > 0.0 && unix_from_iso(&a.last_checked).unwrap_or(0) + (hours * 3600.0) as i64 <= now))
+                    .collect()
+            }
+            None => vec![],
+        }
+    }
+
+    fn enqueue_account(&self, a: FollowedAccount, by: &'static str) -> Option<u64> {
+        let key = format!("account:{}", a.account.id());
+        self.enqueue(JobKind::Account { account: a.account, follow: a.follow, forks: a.forks, watch: true }, key, by)
+    }
+
     fn queue_due(&self) {
         let now = now_unix();
         let due: Vec<String> = match self.lib.lock().unwrap().as_ref() {
@@ -637,6 +698,9 @@ impl App {
         };
         for id in due {
             self.enqueue(JobKind::Check { id: id.clone() }, id, "schedule");
+        }
+        for a in self.accounts_due(false) {
+            self.enqueue_account(a, "schedule");
         }
     }
 
@@ -672,6 +736,7 @@ impl App {
                 JobKind::Add { input, follow } => self.run_add(input, follow, &progress, &stage),
                 JobKind::Check { id } => self.run_check(id, &progress, &stage),
                 JobKind::Release { id, tag } => self.run_release(id, tag, &progress, &stage),
+                JobKind::Account { account, follow, forks, watch } => self.run_account(account, follow, *forks, *watch, &stage),
             };
             let mut j = self.jobs.lock().unwrap();
             j.current = None;
@@ -740,6 +805,54 @@ impl App {
             })?;
         }
         res
+    }
+
+    fn run_account(&self, account: &Account, follow: &Follow, forks: bool, watch: bool, stage: &capture::Stage) -> Result<Outcome> {
+        *stage.lock().unwrap() = format!("Listing the projects of {}", account.name);
+        let list = sources::projects(account, &self.tokens(), &self.client)?;
+        let (have, removed) = self.with_lib(|l| {
+            let removed = l.accounts().into_iter().find(|a| a.account == *account).map(|a| a.removed).unwrap_or_default();
+            Ok((l.repos.keys().cloned().collect::<Vec<_>>(), removed))
+        })?;
+        let mut queued = 0;
+        let mut skipped_forks = 0;
+        for p in &list {
+            let id = format!("{}/{}", account.host, p.path);
+            if have.contains(&id) || removed.contains(&id) {
+                continue;
+            }
+            if p.fork && !forks {
+                skipped_forks += 1;
+                continue;
+            }
+            let input = format!("https://{id}");
+            if self.enqueue(JobKind::Add { input, follow: follow.clone() }, id, "you").is_some() {
+                queued += 1;
+            }
+        }
+        if watch {
+            self.with_lib(|l| {
+                let mut all = l.accounts();
+                match all.iter_mut().find(|a| a.account == *account) {
+                    Some(a) => {
+                        a.last_checked = now_iso();
+                        a.follow = follow.clone();
+                        a.forks = forks;
+                    }
+                    None => all.push(FollowedAccount { account: account.clone(), follow: follow.clone(), forks, added: now_iso(), last_checked: now_iso(), removed: vec![] }),
+                }
+                l.save_accounts(&all)
+            })?;
+        }
+        let mut note = format!("{} has {}", account.id(), plural(list.len(), "project"));
+        note.push_str(&match queued {
+            0 => ": nothing new to add".to_string(),
+            n => format!(": {} to add", plural(n, "new one")),
+        });
+        if skipped_forks > 0 {
+            note.push_str(&format!(" ({} left out)", plural(skipped_forks, "fork")));
+        }
+        Ok(Outcome { note: Some(note), ..Default::default() })
     }
 
     /// Every release the server lists for a project, newest first, with which are
@@ -812,7 +925,14 @@ fn due_at(r: &Repo, s: &Settings) -> Option<i64> {
     Some(last + (hours * 3600.0) as i64)
 }
 
+fn plural(n: usize, word: &str) -> String {
+    format!("{n} {word}{}", if n == 1 { "" } else { "s" })
+}
+
 fn describe(o: &Outcome) -> String {
+    if let Some(n) = &o.note {
+        return n.clone();
+    }
     let mut parts = vec![];
     if let Some(s) = &o.snapshot {
         parts.push(format!("new version of the code ({s})"));

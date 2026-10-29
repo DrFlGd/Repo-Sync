@@ -52,3 +52,11 @@ The worker thread runs one job at a time (Add, Check) from a queue; a job for a 
 ## 8. Phase 1 notes (0.1, 2026-10-29)
 
 Built as above. Checked in a cloud session: the Rust tests, the acceptance test (GitHub and GitLab through `forge_mock.py`: adding, the readme, details, Launch, Check now, the schedule, following, tags, deleting, removing, changing library), and a live add of gitlab.com/gitlab-org/cli (25 MB of code, its latest release filtered to this computer). GitHub itself couldn't be reached from the session; the GitHub source follows the documented API and SCAD Workshop's working code.
+
+## 9. After testing 0.1 (2026-10-29)
+
+Jerred tried 0.1.0 on terrain-press and asked for: a releases view with a box per release to choose which are kept (besides the newest, which checks still take); the Follow options as lists filled from the project (the branch was the one typed field); and adding a GitHub user to capture all of their projects. Decisions:
+
+- **Releases tab.** Lists what the server has (`releases_available`, up to 300), newest first, merged with what's kept. Ticking queues a `release` job for that tag (it sits beside a check of the same project in the queue); clearing a kept one deletes its folder after a confirm, as Delete does. `repo.json`'s `releases` are kept in publish order, so "the last one" stays the newest for Launch and the details.
+- **Accounts.** A link with only an owner (`github.com/someone`, `github.com/orgs/x`, `gitlab.com/groups/x`, `codeberg.org/someone`) is an account. Adding one queues an `account` job: it lists the projects, queues an Add for each one not in the library (forks only when asked) and, unless unticked, follows the account in `_library/accounts.json` (in the library, so it travels with it). The schedule looks at followed accounts at the library's interval; Check all looks too. A project of a followed account removed by hand is remembered in `removed` and not added back.
+- **Wording.** Tags are "Your tags" with a line saying they aren't git tags; "Only files for <system>" with a line saying what's skipped.

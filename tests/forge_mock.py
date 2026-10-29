@@ -12,7 +12,8 @@ the files in one are the release's files, and an optional release.json gives
 {"name", "body", "prerelease", "published_at"} (the folder's time otherwise).
 Newest published first. A test makes a new commit or a new release folder to
 simulate a change upstream. The same projects answer as GitHub (/repos/...)
-and as GitLab (/api/v4/projects/<owner>%2F<name>/...).
+and as GitLab (/api/v4/projects/<owner>%2F<name>/...). /users/<owner>/repos lists
+an owner's projects as GitHub does (a name ending in "-fork" is a fork).
 """
 import argparse
 import json
@@ -106,6 +107,13 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, p.read_bytes(), "application/octet-stream") if p.is_file() else self.send(404, {"message": "Not Found"})
         if parts[:2] == ["api", "v4"] and len(parts) >= 4 and parts[2] == "projects":
             return self.gitlab(parts[3], parts[4:], q)
+        if len(parts) == 3 and parts[0] == "users" and parts[2] == "repos":
+            # an account's projects; a name ending in "-fork" is a fork
+            owner = parts[1]
+            mine = sorted(p.name.split("__", 1)[1] for p in a.repos.iterdir() if p.name.startswith(owner + "__") and (p / ".git").exists())
+            if not mine:
+                return self.send(404, {"message": "Not Found"})
+            return self.send(200, [{"name": n, "full_name": f"{owner}/{n}", "fork": n.endswith("-fork"), "archived": False} for n in mine])
         if len(parts) >= 3 and parts[0] == "repos":
             return self.github(parts[1], parts[2], parts[3:])
         self.send(404, {"message": "Not Found"})
