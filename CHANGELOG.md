@@ -65,4 +65,5 @@ First version of Repo Sync:
 - **Launch the latest release**: the best program for this computer is started (a portable ZIP is unpacked first); the Launch menu lists the others and remembers the choice.
 - **Sort and search**: search names, descriptions, topics, tags and readmes; filter by your own tags, language or server; sort by update, capture, addition, name, size or stars; cards or a list.
 - Settings: the library folder, the schedule, what new projects follow, the size limit, tokens for GitHub, GitLab and Codeberg, light or dark.
+- Changes to a project's follow settings or tags made in quick succession are saved in the order made.
 - `reposync-cli` (`list`, `add`, `check-all`) uses the same library without a window, for scheduled checks while the app is closed.
