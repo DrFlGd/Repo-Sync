@@ -5,7 +5,7 @@
 //! app shows comes from these files, so a library can be copied, synced or
 //! opened on another computer (docs/PLAN.md, "The library folder").
 
-use crate::sources::{Details, SourceRef};
+use crate::sources::{Account, Details, SourceRef};
 use crate::util::{now_iso, read_json_object, write_json};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -45,11 +45,16 @@ pub struct Follow {
     pub files: Files,
     /// Hours between checks: None follows the library's setting, 0 is never (only by hand).
     pub every_hours: Option<f64>,
+    /// How many versions of the code to keep, newest first: None follows the
+    /// library's setting, 0 keeps every one.
+    pub keep_source: Option<u32>,
+    /// How many releases to keep (those picked by hand aside), as `keep_source`.
+    pub keep_releases: Option<u32>,
 }
 
 impl Default for Follow {
     fn default() -> Self {
-        Self { source: true, branch: String::new(), releases: true, prereleases: false, files: Files::All, every_hours: None }
+        Self { source: true, branch: String::new(), releases: true, prereleases: false, files: Files::All, every_hours: None, keep_source: None, keep_releases: None }
     }
 }
 
@@ -95,6 +100,8 @@ pub struct ReleaseRecord {
     pub web_url: String,
     pub assets: Vec<AssetRecord>,
     pub bytes: u64,
+    /// Ticked by hand in Releases: kept whatever the limit on releases.
+    pub picked: bool,
 }
 
 /// What Launch starts: a file in a release's folder ("" for the best one found).
@@ -179,12 +186,35 @@ pub struct Settings {
     pub new_follow: Follow,
     /// Release files over this many MB aren't downloaded (0: no limit).
     pub max_file_mb: u64,
+    /// How many versions of each project's code to keep, newest first (0: every one).
+    pub keep_source: u32,
+    /// How many of each project's releases to keep, newest first (0: every one).
+    pub keep_releases: u32,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { check_every_hours: 24.0, new_follow: Follow::default(), max_file_mb: 0 }
+        Self { check_every_hours: 24.0, new_follow: Follow::default(), max_file_mb: 0, keep_source: 0, keep_releases: 0 }
     }
+}
+
+/// An account whose new projects are added at each check (_library/accounts.json).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FollowedAccount {
+    #[serde(flatten)]
+    pub account: Account,
+    /// What its projects follow when they're added.
+    pub follow: Follow,
+    /// Whether its forks of other projects are added too.
+    #[serde(default)]
+    pub forks: bool,
+    #[serde(default)]
+    pub added: String,
+    #[serde(default)]
+    pub last_checked: String,
+    /// Its projects removed from the library by hand, which aren't added again.
+    #[serde(default)]
+    pub removed: Vec<String>,
 }
 
 pub struct Library {
@@ -265,6 +295,19 @@ impl Library {
             p.push(part);
         }
         p
+    }
+
+    fn accounts_file(&self) -> PathBuf {
+        self.root.join(META_DIR).join("accounts.json")
+    }
+
+    /// The accounts followed for new projects.
+    pub fn accounts(&self) -> Vec<FollowedAccount> {
+        std::fs::read(self.accounts_file()).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()).and_then(|v| serde_json::from_value(v["accounts"].clone()).ok()).unwrap_or_default()
+    }
+
+    pub fn save_accounts(&self, list: &[FollowedAccount]) -> Result<()> {
+        write_json(&self.accounts_file(), &json!({ "accounts": list }))
     }
 
     pub fn save_repo(&self, r: &Repo) -> Result<()> {

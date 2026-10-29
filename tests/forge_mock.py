@@ -12,7 +12,8 @@ the files in one are the release's files, and an optional release.json gives
 {"name", "body", "prerelease", "published_at"} (the folder's time otherwise).
 Newest published first. A test makes a new commit or a new release folder to
 simulate a change upstream. The same projects answer as GitHub (/repos/...)
-and as GitLab (/api/v4/projects/<owner>%2F<name>/...).
+and as GitLab (/api/v4/projects/<owner>%2F<name>/...). /users/<owner>/repos lists
+an owner's projects as GitHub does (a name ending in "-fork" is a fork).
 """
 import argparse
 import json
@@ -67,6 +68,10 @@ def releases(owner, name):
     return out
 
 
+def branches(repo):
+    return [{"name": b} for b in git(repo, "branch", "--format=%(refname:short)").split()]
+
+
 def commit_json(repo, ref):
     sha, date, author, msg = git(repo, "log", "-1", "--format=%H%x00%cI%x00%an%x00%B", ref).strip("\n").split("\x00")
     return sha, date, author, msg
@@ -102,6 +107,13 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, p.read_bytes(), "application/octet-stream") if p.is_file() else self.send(404, {"message": "Not Found"})
         if parts[:2] == ["api", "v4"] and len(parts) >= 4 and parts[2] == "projects":
             return self.gitlab(parts[3], parts[4:], q)
+        if len(parts) == 3 and parts[0] == "users" and parts[2] == "repos":
+            # an account's projects; a name ending in "-fork" is a fork
+            owner = parts[1]
+            mine = sorted(p.name.split("__", 1)[1] for p in a.repos.iterdir() if p.name.startswith(owner + "__") and (p / ".git").exists())
+            if not mine:
+                return self.send(404, {"message": "Not Found"})
+            return self.send(200, [{"name": n, "full_name": f"{owner}/{n}", "fork": n.endswith("-fork"), "archived": False} for n in mine])
         if len(parts) >= 3 and parts[0] == "repos":
             return self.github(parts[1], parts[2], parts[3:])
         self.send(404, {"message": "Not Found"})
@@ -126,6 +138,8 @@ class H(BaseHTTPRequestHandler):
             except subprocess.CalledProcessError:
                 return self.send(404, {"message": "No commit found"})
             return self.send(200, {"sha": sha, "commit": {"committer": {"date": date}, "author": {"name": author}, "message": msg}})
+        if rest == ["branches"]:
+            return self.send(200, branches(repo))
         if rest[0] == "zipball" and len(rest) == 2:
             return self.zip_of(repo, owner, name, rest[1])
         if rest[0] == "releases":
@@ -162,6 +176,8 @@ class H(BaseHTTPRequestHandler):
         if rest[:2] == ["repository", "commits"] and len(rest) == 3:
             sha, date, author, msg = commit_json(repo, head if rest[2] in ("main", "HEAD") else rest[2])
             return self.send(200, {"id": sha, "committed_date": date, "author_name": author, "message": msg, "title": msg.splitlines()[0]})
+        if rest == ["repository", "branches"]:
+            return self.send(200, branches(repo))
         if rest == ["repository", "archive.zip"]:
             return self.zip_of(repo, owner, name, q.get("sha", [head])[0])
         if rest == ["releases"]:

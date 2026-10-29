@@ -1,7 +1,7 @@
 // Dialogs: Add projects (one link or many), and asking before something is removed.
 import { html, useEffect, useRef, useState } from "../lib/html.js";
 import { useStore } from "../lib/store.js";
-import { ui, api, toast, errText, poke } from "./state.js";
+import { ui, api, toast, errText, poke, fileChoices } from "./state.js";
 import { Icon } from "./icons.js";
 
 export const openAdd = (text = "") => ui.set({ dialog: { type: "add", text } });
@@ -11,17 +11,14 @@ export function confirmDialog({ title, body, ok = "Remove", danger = true }) {
   return new Promise((resolve) => ui.set({ dialog: { type: "confirm", title, body, ok, danger, resolve } }));
 }
 
-const FILES = [
-  ["all", "Every file"],
-  ["this-computer", "Only files for this computer"],
-  ["none", "Only the notes"],
-];
 
 function AddDialog({ text }) {
   const [value, setValue] = useState(text || "");
   const [checks, setChecks] = useState([]);
   const [follow, setFollow] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [watch, setWatch] = useState(true);
+  const [forks, setForks] = useState(false);
   const [err, setErr] = useState("");
   const box = useRef(null);
   useEffect(() => {
@@ -35,16 +32,19 @@ function AddDialog({ text }) {
     return () => clearTimeout(t);
   }, [value]);
   const good = checks.filter((c) => c.ok && !c.in_library);
+  const accounts = good.filter((c) => c.account);
   const add = async (e) => {
     e?.preventDefault();
     if (!good.length || busy) return;
     setBusy(true);
     setErr("");
     try {
-      const res = await api("add", { inputs: good.map((c) => c.input), follow });
-      const queued = res.filter((r) => r.job);
+      const res = await api("add", { inputs: good.map((c) => c.input), follow, watch, forks });
+      const queued = res.filter((r) => r.job && r.id);
+      const listing = res.filter((r) => r.job && r.account);
       ui.set({ dialog: null });
-      toast(queued.length ? `Adding ${queued.length === 1 ? queued[0].id : `${queued.length} projects`}…` : "Nothing new to add");
+      toast(listing.length ? `Listing the projects of ${listing.map((r) => r.account).join(", ")}…`
+        : queued.length ? `Adding ${queued.length === 1 ? queued[0].id : `${queued.length} projects`}…` : "Nothing new to add");
       poke();
       if (location.hash.startsWith("#/repo/") || location.hash.startsWith("#/settings")) location.hash = "#/";
     } catch (e2) {
@@ -56,28 +56,33 @@ function AddDialog({ text }) {
   return html`<form class="dialog" role="dialog" aria-modal="true" aria-labelledby="add-title" onSubmit=${add}>
     <h2 id="add-title">Add projects</h2>
     <label class="field"><span>Links, one per line</span>
-      <textarea id="add-links" ref=${box} rows="4" placeholder=${"https://github.com/owner/name\nhttps://gitlab.com/group/project\nhttps://codeberg.org/owner/name"}
+      <textarea id="add-links" ref=${box} rows="4" placeholder=${"https://github.com/owner/name\nhttps://gitlab.com/group/project\nhttps://github.com/someone (all of their projects)"}
         value=${value} onInput=${(e) => setValue(e.target.value)}
         onKeyDown=${(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) add(e); }}></textarea></label>
     ${checks.length > 0 && html`<ul class="checks" aria-label="What the links name">${checks.map((c) => html`<li>
       ${!c.ok ? html`<span class="bad">${Icon.x(12)}</span><span class="bad">${c.error}</span>`
+        : c.account ? html`<span class="good">${Icon.check(12)}</span><span class="mono">${c.account.id}</span><span class="muted">every project of this ${c.account.kind} account${c.following ? " (followed already)" : ""}</span>`
         : c.in_library ? html`<span class="have">${Icon.alert(12)}</span><span class="mono">${c.id}</span><span class="have">already in the library</span>`
         : html`<span class="good">${Icon.check(12)}</span><span class="mono">${c.id}</span><span class="muted">${c.kind || "server found when added"}</span>`}
     </li>`)}</ul>`}
     ${follow && html`<div class="options">
       <div class="row">
         <label class="check"><input type="checkbox" id="add-source" checked=${follow.source} onChange=${(e) => set({ source: e.target.checked })} /> The code (default branch)</label>
-        <label class="check"><input type="checkbox" id="add-releases" checked=${follow.releases} onChange=${(e) => set({ releases: e.target.checked })} /> The latest release</label>
+        <label class="check"><input type="checkbox" id="add-releases" checked=${follow.releases} onChange=${(e) => set({ releases: e.target.checked })} /> The newest release</label>
         <label class="check"><input type="checkbox" checked=${follow.prereleases} disabled=${!follow.releases} onChange=${(e) => set({ prereleases: e.target.checked })} /> including pre-releases</label>
       </div>
       <div class="row"><label class="field" style="flex:1"><span>Release files to keep</span>
-        <select id="add-files" value=${follow.files} disabled=${!follow.releases} onChange=${(e) => set({ files: e.target.value })}>${FILES.map(([k, l]) => html`<option value=${k}>${l}</option>`)}</select></label></div>
+        <select id="add-files" value=${follow.files} disabled=${!follow.releases} onChange=${(e) => set({ files: e.target.value })}>${fileChoices().map(([k, l]) => html`<option value=${k}>${l}</option>`)}</select></label></div>
+      ${accounts.length > 0 && html`<div class="row">
+        <label class="check"><input type="checkbox" id="add-watch" checked=${watch} onChange=${(e) => setWatch(e.target.checked)} /> Add their new projects at each check</label>
+        <label class="check"><input type="checkbox" id="add-forks" checked=${forks} onChange=${(e) => setForks(e.target.checked)} /> Include their forks of other projects</label>
+      </div>`}
       <p class="hint">New versions are captured on the library's schedule (Settings), each beside the ones before.</p>
     </div>`}
     ${err && html`<p class="notice error">${err}</p>`}
     <div class="buttons">
       <button type="button" onClick=${() => ui.set({ dialog: null })}>Cancel</button>
-      <button type="submit" class="primary" id="add-go" disabled=${!good.length || busy}>${Icon.plus(15)} ${good.length > 1 ? `Add ${good.length} projects` : "Add"}</button>
+      <button type="submit" class="primary" id="add-go" disabled=${!good.length || busy}>${Icon.plus(15)} ${accounts.length ? (accounts.length === good.length && accounts.length === 1 ? "Add their projects" : `Add ${good.length} links`) : good.length > 1 ? `Add ${good.length} projects` : "Add"}</button>
     </div>
   </form>`;
 }

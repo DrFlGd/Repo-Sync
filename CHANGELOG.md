@@ -17,7 +17,7 @@ A desktop app (Windows first, Linux kept portable; Tauri 2) that keeps an offlin
 | Path | What |
 | --- | --- |
 | `web/` | The front end (no build step). `app.js`: start-up and routing (`#/`, `#/repo/<id>?tab=`, `#/activity`, `#/settings`, `#/about`). `web/ui/`: `shell.js` (mounts the islands: the menu with its tag, language and server filters, the status bar with the download in hand, keys, pasting a link anywhere opens Add), `state.js` (shared state, prefs, theme, polling the jobs: every second while there's work, every 15 s otherwise), `library.js` (cards and list, search, sort), `repo.js` (a project's page: readme, code versions, releases, the details/follow/tags inspector, Launch and its menu), `dialogs.js` (Add, confirm), `activity.js`, `settings.js`, `about.js`, `actions.js` (launch, check, open folder), `icons.js`. `lib/format.js`: sizes and dates. `platform.js` / `platform-desktop.js`: the seam between the page and the backend. |
-| `desktop/core/` | Rust, no GUI. `api.rs` (the command table `App::call`, the job queue and its worker thread, the schedule thread), `library.rs` (the library folder, `repo.json`'s shape, scanning), `sources/` (`mod.rs`: reading links, the `Source` trait, ids; `github.rs`, `gitlab.rs`, `gitea.rs`), `capture.rs` (a check: details, a new snapshot of the code, a new release, each into its own folder through `.partial/`), `http.rs` (ureq: JSON, downloads with progress and Stop, no proxy for this computer or NO_PROXY), `archive.rs` (unpacking ZIP and .tar.gz safely), `readme.rs` (Markdown with ammonia; relative pictures from the captured files, relative links to the site), `launch.rs` (which files are for which system, launch candidates and their order, starting them), `config.rs` (this computer: the open library, tokens, prefs), `util.rs`. `src/bin/reposync-cli.rs`: `list`, `add`, `check-all`, `serve` (the backend over HTTP for the tests). |
+| `desktop/core/` | Rust, no GUI. `api.rs` (the command table `App::call`, the job queue and its worker thread, the schedule thread), `library.rs` (the library folder, `repo.json`'s shape, scanning), `sources/` (`mod.rs`: reading links, the `Source` trait, ids; `github.rs`, `gitlab.rs`, `gitea.rs`; `account.rs`: links to users and organisations, listing their projects), `capture.rs` (a check: details, a new snapshot of the code, a new release, each into its own folder through `.partial/`), `http.rs` (ureq: JSON, downloads with progress and Stop, no proxy for this computer or NO_PROXY), `archive.rs` (unpacking ZIP and .tar.gz safely), `readme.rs` (Markdown with ammonia; relative pictures from the captured files, relative links to the site), `launch.rs` (which files are for which system, launch candidates and their order, starting them), `config.rs` (this computer: the open library, tokens, prefs), `util.rs`. `src/bin/reposync-cli.rs`: `list`, `add`, `check-all`, `serve` (the backend over HTTP for the tests). |
 | `desktop/src-tauri/` | The Tauri app: a thin layer over `api.rs`, plus the folder dialog, the file manager, web links in the browser and the `library://` protocol (pictures in readmes). Version in `tauri.conf.json`. Icons from `icons/icon.svg` (`npx @tauri-apps/cli@2 icon icons/icon.svg -o icons`, then delete the mobile ones). |
 | `tools/` | `build_desktop.py` (web/ to `build/desktop/ui`, fonts with `--fetch-fonts`, `THIRD_PARTY.md` and `build-info.json` for About), `set_version.py`, `vendor_preact.py`. |
 | `tests/` | `desktop_page.py` (acceptance test: the page + `reposync-cli serve` + `forge_mock.py`, in Chromium), `forge_mock.py` (GitHub's and GitLab's APIs over local git repositories, releases as folders), `tauri_shim.js`. |
@@ -41,20 +41,35 @@ A desktop app (Windows first, Linux kept portable; Tauri 2) that keeps an offlin
 ### Known limitations now
 
 - Checks run while the app is open (or from `reposync-cli check-all`); there's no tray icon or service yet.
-- Only the latest release is captured on each check, not the history before the project was added.
+- Each check captures only the newest release; earlier ones are kept when ticked in the Releases tab (the app lists at most 300 a project).
+- A followed account lists only public projects on GitHub (private ones need adding one by one).
 - A plain git address (no GitHub, GitLab or Gitea API) can't be added yet; nor can private projects without a token.
 - Launch starts installers as they are (each Launch runs the installer again); it can't tell which program an installer put on the computer.
+- A lowered limit to keep takes effect at the project's next check, not at once.
 - Downloads don't resume: a broken one is tried again whole at the next check.
 - Tokens are stored in plain text in the app's config folder (not the system's keyring).
 - Installers aren't code-signed, and the app doesn't update itself.
 
 ### Next (ideas, not yet chosen by the owner)
 
-Keep running in the tray so checks happen with the window closed; capture several past releases when a project is added; full-text search across the captured code, not only readmes; a plain-git source; per-project "keep at most N versions"; the app updating itself from its own releases (as Game Repo does).
+Keep running in the tray so checks happen with the window closed; full-text search across the captured code, not only readmes; a plain-git source; per-project "keep at most N versions"; the app updating itself from its own releases (as Game Repo does).
 
 ---
 
 ## Unreleased
+
+After testing 0.1.0 on terrain-press, Jerred asked for these:
+
+- **Add every project of a GitHub user or organisation** (or a GitLab user or group, or a Codeberg/Gitea user): paste a link such as `https://github.com/someone`. The account is followed, so its new projects are added at each scheduled check (or Check all); its forks are left out unless asked, and a project removed by hand isn't added back. Settings lists the followed accounts, with Stop following.
+- **Pick which releases to keep.** The Releases tab lists every release on the server (pre-releases can be hidden), with a box to keep each one: ticking downloads it, clearing a tick deletes its files. The newest release is still downloaded by each check. Releases are kept in the order they were published, so an older one picked later never becomes the one Launch starts.
+- **Keep only the newest versions, if you like.** Settings has separate limits for versions of the code and for releases ("Every one", "Only the newest", the newest 2, 3, 5 or 10), and a project can have its own in Follow. After each check, the oldest past the limit are deleted; releases ticked by hand are always kept (marked "picked"). Activity says what was deleted.
+- **The branch to follow is picked from a list** of the project's branches (typed by hand only when the server can't list them).
+- Clearer words: "Your tags" says they're your own labels, not the project's git tags; "Only files for Windows" (was "for this computer") says which files are skipped; "The newest release" (was "Releases") in Follow.
+- Changes to a project's follow settings or tags made in quick succession are saved in the order made.
+
+For agents: `Source` gained `releases(limit)` and `branches()` (paged; the mock serves both); `sources/account.rs` reads account links and lists an account's projects; followed accounts live in `_library/accounts.json`; `capture::prune` applies the limits to keep (`Settings.keep_source`/`keep_releases`, `Follow.keep_source`/`keep_releases`, 0 or null for every one; `ReleaseRecord.picked` exempts hand-picked releases); new jobs `account` and `release`, new commands `releases_available`, `release_get`, `branches`, `accounts`, `account_remove`.
+
+## 0.1.0 (2026-10-29)
 
 First version of Repo Sync:
 
@@ -65,5 +80,4 @@ First version of Repo Sync:
 - **Launch the latest release**: the best program for this computer is started (a portable ZIP is unpacked first); the Launch menu lists the others and remembers the choice.
 - **Sort and search**: search names, descriptions, topics, tags and readmes; filter by your own tags, language or server; sort by update, capture, addition, name, size or stars; cards or a list.
 - Settings: the library folder, the schedule, what new projects follow, the size limit, tokens for GitHub, GitLab and Codeberg, light or dark.
-- Changes to a project's follow settings or tags made in quick succession are saved in the order made.
 - `reposync-cli` (`list`, `add`, `check-all`) uses the same library without a window, for scheduled checks while the app is closed.

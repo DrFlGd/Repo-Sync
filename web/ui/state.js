@@ -109,3 +109,20 @@ export function poke() {
   clearTimeout(pollTimer);
   setTimeout(startPolling, 250);
 }
+
+// How many versions to keep: 0 is every one.
+export const KEEP = [[0, "Every one"], [1, "Only the newest"], [2, "The newest 2"], [3, "The newest 3"], [5, "The newest 5"], [10, "The newest 10"]];
+export const keepLabel = (n) => (KEEP.find(([v]) => v === n) || [n, `The newest ${n}`])[1];
+
+// "Release files to keep", named for this computer's system.
+const SYSTEMS = { windows: "Windows", linux: "Linux", macos: "Mac" };
+const thisSystem = () => SYSTEMS[ui.get().info.os] || "this computer";
+export const fileChoices = () => [
+  ["all", "Every file"],
+  ["this-computer", `Only files for ${thisSystem()}`],
+  ["none", "Only the release notes"],
+];
+export const filesHint = () => {
+  const others = Object.values(SYSTEMS).filter((x) => x !== thisSystem()).join(" or ");
+  return `Files named for ${others} (like -linux, -mac, .dmg, .deb), or for another processor (like arm64), are skipped. Files that name no system are kept.`;
+};
