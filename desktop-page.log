@@ -1,0 +1,97 @@
+ok   an empty library offers to add a project
+ok   the Add dialog reads each link
+ok   a line that isn't a link is pointed out
+ok   three links can be added
+ok   both projects are added and captured
+ok   the jobs finish
+ok   the project that doesn't exist isn't added
+ok   each project has a folder with repo.json
+ok   a failed add leaves no folder behind
+ok   the code and the latest release were captured
+ok   the code is unpacked into source/<version>/
+ok   the release's files are in releases/<tag>/
+ok   the release's notes are kept beside its files
+ok   the card shows the latest release
+ok   Activity says why a project couldn't be added
+ok   search finds words in readmes
+ok   a readme match is labelled
+ok   clearing the search shows everything
+ok   the list view has a row per project
+ok   the readme is shown
+ok   pictures in the readme come from the captured files
+ok   the readme's picture loads offline
+ok   scripts in a readme don't run
+ok   relative links in a readme lead to the project's site
+ok   details show Size on disk
+ok   details show Added
+ok   details show Last captured
+ok   details show Last checked
+ok   details show Updated upstream
+ok   details show Latest release
+ok   details show MIT
+ok   Launch starts the latest release's program
+ok   Launch offers only what runs on this computer
+ok   Check now captures the new version and release
+ok   the earlier version of the code is kept
+ok   the earlier release is kept beside the new one
+ok   Code versions lists both versions
+ok   Releases lists both releases
+ok   a release's notes are shown
+ok   Launch now starts the newer release
+ok   the newer release is launched
+ok   a check with nothing new says it's up to date
+ok   nothing is captured twice
+ok   the schedule captures a change by itself
+ok   scheduled checks finish
+ok   Activity records scheduled checks
+ok   every release on the server is listed
+ok   kept releases are ticked
+ok   a pre-release is marked
+ok   ticking a release downloads it, in publish order
+ok   the picked release's files are kept
+ok   the picked release shows as kept
+ok   an older release picked later doesn't replace the newest for Launch
+ok   clearing a tick deletes that release
+ok   the cleared release is unticked
+ok   pre-releases can be hidden
+ok   follow settings are saved in repo.json
+ok   the files choice says what's skipped
+ok   the branch list offers the project's branches beside the default
+ok   a branch can be picked from the list
+ok   the default branch can be picked again
+ok   a GitLab project says where it's from
+ok   a tag is saved
+ok   the GitLab project's new release is captured
+ok   files for another system are skipped when asked
+ok   files for any system are kept
+ok   a tag in the menu narrows the library
+ok   a version can be deleted
+ok   its folder is gone
+ok   removing a project deletes its folder
+ok   the removed project leaves the library
+ok   the library folder can be changed
+ok   a new library folder is set up
+ok   the first library opens again with its project
+ok   a link to a user is read as an account
+ok   an account is followed, and its forks left out, unless asked
+ok   every project of the account is added
+ok   adding the account's projects finishes
+ok   its forks are left out
+ok   the account is followed
+ok   a followed account's new project is added at the next check
+ok   the checks finish
+ok   a project removed by hand isn't added back
+ok   an account can be unfollowed
+ok   a project's limits to keep are saved
+ok   a release ticked by hand is marked as picked
+ok   the picked release is downloaded
+ok   only the newest release is kept, beside the picked one
+ok   only the newest version of the code is kept
+ok   older releases' folders are deleted, the picked one stays
+ok   Activity says what the limits deleted
+ok   the library's limits are saved
+ok   the theme can be dark
+ok   a narrow window doesn't scroll sideways
+ok   no errors in the page []
+
+all passed

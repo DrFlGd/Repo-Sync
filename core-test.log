@@ -1,0 +1,33 @@
+   Compiling reposync-core v0.1.1 (D:\a\Repo-Sync\Repo-Sync\desktop\core)
+    Finished `release` profile [optimized] target(s) in 9.56s
+     Running unittests src\lib.rs (target\release\deps\reposync_core-f4fdab1f1a007f3f.exe)
+
+running 13 tests
+test capture::tests::readmes_are_found ... ok
+test launch::tests::release_files_by_system ... ok
+test capture::tests::prune_keeps_the_newest_and_picked_releases ... ok
+test readme::tests::markdown_with_html_is_cleaned ... ok
+test archive::tests::unzip_strips_the_top_folder_and_refuses_escapes ... ok
+test readme::tests::plain_text_and_paths ... ok
+test sources::account::tests::account_links ... ok
+test sources::tests::ids_and_names ... ok
+test util::tests::names_are_safe_everywhere ... ok
+test sources::tests::links_of_every_shape ... ok
+test util::tests::times_round_trip ... ok
+test library::tests::library_round_trip_keeps_unknown_keys ... ok
+test launch::tests::candidates_prefer_the_program_and_unpack_archives ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running unittests src\bin\reposync-cli.rs (target\release\deps\reposync_cli-e63e6c16499268b1.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests reposync_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

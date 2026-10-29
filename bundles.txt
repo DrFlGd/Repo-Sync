@@ -1,0 +1,5 @@
+total 8516
+drwxr-xr-x 1 runneradmin 197121       0 Oct 29 11:53 .
+drwxr-xr-x 1 runneradmin 197121       0 Oct 29 11:53 ..
+-rwxr-xr-x 1 runneradmin 197121 3743134 Oct 29 11:53 Repo Sync_0.1.1_x64-setup.exe
+-rwxr-xr-x 1 runneradmin 197121 4970496 Oct 29 11:53 reposync-cli-0.1.1-windows-x64.exe
