@@ -3,7 +3,7 @@
 // and its tags.
 import { html, useEffect, useRef, useState } from "../lib/html.js";
 import { useStore } from "../lib/store.js";
-import { ui, api, toast, errText, loadRepos, fileChoices, filesHint } from "./state.js";
+import { ui, api, toast, errText, loadRepos, fileChoices, filesHint, KEEP, keepLabel } from "./state.js";
 import { Icon } from "./icons.js";
 import { confirmDialog } from "./dialogs.js";
 import { launch, check, openFolder, openUrl } from "./actions.js";
@@ -133,14 +133,15 @@ function Available({ repo, reload, del }) {
     if (on) {
       try { await api("release_get", { id, tag: r.tag }); toast(`Downloading ${r.tag}`); read(); loadRepos(); } catch (e) { toast(errText(e), 6000); }
     } else if (r.kept) {
-      const k = repo.releases.find((x) => x.folder === r.kept);
-      if (k && (await del(k))) read();
+      // the list can know of a release before the page has read the project again
+      const k = repo.releases.find((x) => x.folder === r.kept) || { tag: r.tag, folder: r.kept, bytes: r.bytes };
+      if (await del(k)) read(); else setList([...list]);
     }
   };
   return html`<section class="available" id="available">
     <h2 class="section-head">On ${site} <span class="n">${list.length}</span>
       <button type="button" class="ghost small" id="available-refresh" title=${`Ask ${site} for its releases again`} onClick=${read}>${Icon.refresh(13)}</button></h2>
-    <p class="hint">Tick a release to download and keep it. Each check also downloads the newest release by itself (see Follow, on the right). Clearing a tick deletes that release's files.
+    <p class="hint">Tick a release to download and keep it; ticked releases are kept whatever the limit on releases. Each check also downloads the newest release by itself (see Follow, on the right). Clearing a tick deletes that release's files.
       ${npre > 0 && html` <label class="check inline"><input type="checkbox" id="available-pre" checked=${pre} onChange=${(e) => setPre(e.target.checked)} /> Show ${npre} pre-release${npre === 1 ? "" : "s"}</label>`}</p>
     <table class="list">
       <thead><tr><th>Keep</th><th>Release</th><th>Published</th><th class="num">Files</th><th class="num">Size</th></tr></thead>
@@ -177,6 +178,7 @@ function Releases({ repo, reload }) {
       ${r.name && r.name !== r.tag && html`<span class="mono muted">${r.tag}</span>`}
       ${i === 0 && html`<span class="badge plain">newest kept</span>`}
       ${r.prerelease && html`<span class="badge warn">pre-release</span>`}
+      ${r.picked && html`<span class="badge plain" title="Ticked in the list above: kept whatever the limit on releases">picked</span>`}
       <span class="spacer" style="flex:1"></span>
       <button type="button" class="small" title="Start this release's program" disabled=${!r.assets.some((a) => a.file)} onClick=${() => launch(id, { folder: r.folder })}>${Icon.play(13)} Launch</button>
       <button type="button" class="ghost small" title="Open this release's folder" onClick=${() => openFolder(id, `releases/${r.folder}`)}>${Icon.folder(14)}</button>
@@ -214,6 +216,8 @@ function useBranches(id) {
 
 function Following({ repo, save }) {
   const branches = useBranches(repo.summary.id);
+  const [lib, setLib] = useState({});
+  useEffect(() => { api("settings_get").then((s) => setLib(s.library)).catch(() => {}); }, []);
   // kept here too, so a second change made before the first is saved builds on it
   const [f, setF] = useState(repo.follow);
   const latest = useRef(repo.follow);
@@ -239,6 +243,16 @@ function Following({ repo, save }) {
       <select aria-label="Release files to keep" value=${f.files} disabled=${!f.releases} onChange=${(e) => set({ files: e.target.value })}>
         ${fileChoices().map(([k, l]) => html`<option value=${k}>${l}</option>`)}</select></div>
     ${f.releases && f.files === "this-computer" && html`<p class="hint" style="padding-left:24px">${filesHint()}</p>`}
+    <div class="row"><span class="muted">Keep code</span>
+      <select id="follow-keep-source" aria-label="Versions of the code to keep" value=${f.keep_source == null ? "" : String(f.keep_source)}
+        onChange=${(e) => set({ keep_source: e.target.value === "" ? null : Number(e.target.value) })}>
+        <option value="">Library's setting (${keepLabel(lib.keep_source || 0).toLowerCase()})</option>
+        ${KEEP.map(([v]) => html`<option value=${String(v)}>${keepLabel(v)}</option>`)}</select></div>
+    <div class="row"><span class="muted">Keep releases</span>
+      <select id="follow-keep-releases" aria-label="Releases to keep" value=${f.keep_releases == null ? "" : String(f.keep_releases)}
+        onChange=${(e) => set({ keep_releases: e.target.value === "" ? null : Number(e.target.value) })}>
+        <option value="">Library's setting (${keepLabel(lib.keep_releases || 0).toLowerCase()})</option>
+        ${KEEP.map(([v]) => html`<option value=${String(v)}>${keepLabel(v)}</option>`)}</select></div>
     <div class="row"><span class="muted">Check</span>
       <select id="follow-every" aria-label="How often to check" value=${f.every_hours == null ? "" : String(f.every_hours)}
         onChange=${(e) => set({ every_hours: e.target.value === "" ? null : Number(e.target.value) })}>

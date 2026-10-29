@@ -110,6 +110,10 @@ export function poke() {
   setTimeout(startPolling, 250);
 }
 
+// How many versions to keep: 0 is every one.
+export const KEEP = [[0, "Every one"], [1, "Only the newest"], [2, "The newest 2"], [3, "The newest 3"], [5, "The newest 5"], [10, "The newest 10"]];
+export const keepLabel = (n) => (KEEP.find(([v]) => v === n) || [n, `The newest ${n}`])[1];
+
 // "Release files to keep", named for this computer's system.
 const SYSTEMS = { windows: "Windows", linux: "Linux", macos: "Mac" };
 const thisSystem = () => SYSTEMS[ui.get().info.os] || "this computer";

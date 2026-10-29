@@ -2,7 +2,7 @@
 // tokens for the servers, and the theme.
 import { html, useEffect, useState } from "../lib/html.js";
 import { useStore } from "../lib/store.js";
-import { ui, api, ctx, toast, errText, setPref, loadRepos, fileChoices } from "./state.js";
+import { ui, api, ctx, toast, errText, setPref, loadRepos, fileChoices, KEEP, keepLabel } from "./state.js";
 import { Icon } from "./icons.js";
 import { ago, when } from "../lib/format.js";
 
@@ -75,9 +75,20 @@ export function SettingsPage() {
           <select id="check-every" value=${String(lib.check_every_hours)} onChange=${(e) => saveLib({ check_every_hours: Number(e.target.value) })}>
             ${EVERY.map(([v, l]) => html`<option value=${String(v)}>${l}</option>`)}
             ${!EVERY.some(([v]) => v === lib.check_every_hours) && html`<option value=${String(lib.check_every_hours)}>Every ${lib.check_every_hours} hours</option>`}</select></label>
-        <p class="hint">Checks run while Repo Sync is open (one download at a time); a project can have its own schedule on its page. New versions and releases are added beside the ones already kept: nothing is replaced or deleted.
+        <p class="hint">Checks run while Repo Sync is open (one download at a time); a project can have its own schedule on its page. New versions and releases are added beside the ones already kept; nothing is deleted unless you set a limit below.
           ${s.next_check && html` Next check ${ago(s.next_check)} (${when(s.next_check)}).`}</p>
         <p class="hint">To check while the app is closed, schedule <span class="mono">reposync-cli check-all</span> (for example with Windows Task Scheduler).</p>
+        <div class="row" style="gap:16px; flex-wrap:wrap">
+          <label class="field" style="flex:1"><span>Versions of the code to keep</span>
+            <select id="keep-source" value=${String(lib.keep_source || 0)} onChange=${(e) => saveLib({ keep_source: Number(e.target.value) })}>
+              ${KEEP.map(([v]) => html`<option value=${String(v)}>${keepLabel(v)}</option>`)}
+              ${!KEEP.some(([v]) => v === (lib.keep_source || 0)) && html`<option value=${String(lib.keep_source)}>${keepLabel(lib.keep_source)}</option>`}</select></label>
+          <label class="field" style="flex:1"><span>Releases to keep</span>
+            <select id="keep-releases" value=${String(lib.keep_releases || 0)} onChange=${(e) => saveLib({ keep_releases: Number(e.target.value) })}>
+              ${KEEP.map(([v]) => html`<option value=${String(v)}>${keepLabel(v)}</option>`)}
+              ${!KEEP.some(([v]) => v === (lib.keep_releases || 0)) && html`<option value=${String(lib.keep_releases)}>${keepLabel(lib.keep_releases)}</option>`}</select></label>
+        </div>
+        <p class="hint">With a limit, each check deletes the oldest versions or releases past it, after capturing anything new. Releases you ticked yourself in a project's Releases tab are always kept. A project can have its own limits on its page.</p>
         <label class="field"><span>Don't download release files bigger than</span>
           <div class="row"><input type="number" min="0" step="50" style="width:120px" value=${lib.max_file_mb} onChange=${(e) => saveLib({ max_file_mb: Math.max(0, Math.round(Number(e.target.value) || 0)) })} /> MB <span class="hint">(0: no limit)</span></div></label>
       </div></section>

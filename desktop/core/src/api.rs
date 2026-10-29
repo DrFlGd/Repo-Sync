@@ -753,9 +753,10 @@ impl App {
         self.config.lock().unwrap().tokens.clone()
     }
 
-    fn limits(&self) -> Limits {
-        let mb = self.lib.lock().unwrap().as_ref().map(|l| l.settings.max_file_mb).unwrap_or(0);
-        Limits { max_file: mb << 20 }
+    /// The library's limits, with `follow`'s own limits to keep where it has them.
+    fn limits(&self, follow: &Follow) -> Limits {
+        let s = self.lib.lock().unwrap().as_ref().map(|l| l.settings.clone()).unwrap_or_default();
+        Limits { max_file: s.max_file_mb << 20, keep_source: follow.keep_source.unwrap_or(s.keep_source), keep_releases: follow.keep_releases.unwrap_or(s.keep_releases) }
     }
 
     fn run_add(&self, input: &str, follow: &Follow, progress: &Progress, stage: &capture::Stage) -> Result<Outcome> {
@@ -776,7 +777,8 @@ impl App {
             l.repos.insert(id.clone(), repo.clone());
             Ok(l.folder_of(&id))
         })?;
-        let res = capture::update(&mut repo, &folder, src.as_ref(), &self.client, progress, stage, &self.limits());
+        let limits = self.limits(&repo.follow);
+        let res = capture::update(&mut repo, &folder, src.as_ref(), &self.client, progress, stage, &limits);
         self.store(&id, &repo, &res)?;
         res
     }
@@ -784,7 +786,8 @@ impl App {
     fn run_check(&self, id: &str, progress: &Progress, stage: &capture::Stage) -> Result<Outcome> {
         let (mut repo, folder) = self.with_lib(|l| Ok((l.repos.get(id).cloned().context("That project isn't in the library any more.")?, l.folder_of(id))))?;
         let src = sources::open(&repo.source, &self.tokens(), self.client.clone());
-        let res = capture::update(&mut repo, &folder, src.as_ref(), &self.client, progress, stage, &self.limits());
+        let limits = self.limits(&repo.follow);
+        let res = capture::update(&mut repo, &folder, src.as_ref(), &self.client, progress, stage, &limits);
         self.store(id, &repo, &res)?;
         res
     }
@@ -792,7 +795,8 @@ impl App {
     fn run_release(&self, id: &str, tag: &str, progress: &Progress, stage: &capture::Stage) -> Result<Outcome> {
         let (mut repo, folder) = self.with_lib(|l| Ok((l.repos.get(id).cloned().context("That project isn't in the library any more.")?, l.folder_of(id))))?;
         let src = sources::open(&repo.source, &self.tokens(), self.client.clone());
-        let res = capture::capture_tag(&mut repo, &folder, tag, src.as_ref(), &self.client, progress, stage, &self.limits());
+        let limits = self.limits(&repo.follow);
+        let res = capture::capture_tag(&mut repo, &folder, tag, src.as_ref(), &self.client, progress, stage, &limits);
         if res.is_ok() {
             self.with_lib(|l| {
                 let Some(cur) = l.repos.get(id) else { return Ok(()) };
@@ -941,6 +945,9 @@ fn describe(o: &Outcome) -> String {
         parts.push(format!("new release {r}"));
     }
     let mut msg = if parts.is_empty() { "Up to date".to_string() } else { format!("Captured: {}", parts.join(", ")) };
+    if !o.removed.is_empty() {
+        msg.push_str(&format!(". Deleted to stay within the limits: {}", o.removed.join(", ")));
+    }
     for w in &o.warnings {
         msg.push_str(&format!(". {w}"));
     }

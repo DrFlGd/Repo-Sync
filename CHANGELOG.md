@@ -45,6 +45,7 @@ A desktop app (Windows first, Linux kept portable; Tauri 2) that keeps an offlin
 - A followed account lists only public projects on GitHub (private ones need adding one by one).
 - A plain git address (no GitHub, GitLab or Gitea API) can't be added yet; nor can private projects without a token.
 - Launch starts installers as they are (each Launch runs the installer again); it can't tell which program an installer put on the computer.
+- A lowered limit to keep takes effect at the project's next check, not at once.
 - Downloads don't resume: a broken one is tried again whole at the next check.
 - Tokens are stored in plain text in the app's config folder (not the system's keyring).
 - Installers aren't code-signed, and the app doesn't update itself.
@@ -61,11 +62,12 @@ After testing 0.1.0 on terrain-press, Jerred asked for these:
 
 - **Add every project of a GitHub user or organisation** (or a GitLab user or group, or a Codeberg/Gitea user): paste a link such as `https://github.com/someone`. The account is followed, so its new projects are added at each scheduled check (or Check all); its forks are left out unless asked, and a project removed by hand isn't added back. Settings lists the followed accounts, with Stop following.
 - **Pick which releases to keep.** The Releases tab lists every release on the server (pre-releases can be hidden), with a box to keep each one: ticking downloads it, clearing a tick deletes its files. The newest release is still downloaded by each check. Releases are kept in the order they were published, so an older one picked later never becomes the one Launch starts.
+- **Keep only the newest versions, if you like.** Settings has separate limits for versions of the code and for releases ("Every one", "Only the newest", the newest 2, 3, 5 or 10), and a project can have its own in Follow. After each check, the oldest past the limit are deleted; releases ticked by hand are always kept (marked "picked"). Activity says what was deleted.
 - **The branch to follow is picked from a list** of the project's branches (typed by hand only when the server can't list them).
 - Clearer words: "Your tags" says they're your own labels, not the project's git tags; "Only files for Windows" (was "for this computer") says which files are skipped; "The newest release" (was "Releases") in Follow.
 - Changes to a project's follow settings or tags made in quick succession are saved in the order made.
 
-For agents: `Source` gained `releases(limit)` and `branches()` (paged; the mock serves both); `sources/account.rs` reads account links and lists an account's projects; followed accounts live in `_library/accounts.json`; new jobs `account` and `release`, new commands `releases_available`, `release_get`, `branches`, `accounts`, `account_remove`.
+For agents: `Source` gained `releases(limit)` and `branches()` (paged; the mock serves both); `sources/account.rs` reads account links and lists an account's projects; followed accounts live in `_library/accounts.json`; `capture::prune` applies the limits to keep (`Settings.keep_source`/`keep_releases`, `Follow.keep_source`/`keep_releases`, 0 or null for every one; `ReleaseRecord.picked` exempts hand-picked releases); new jobs `account` and `release`, new commands `releases_available`, `release_get`, `branches`, `accounts`, `account_remove`.
 
 ## 0.1.0 (2026-10-29)
 

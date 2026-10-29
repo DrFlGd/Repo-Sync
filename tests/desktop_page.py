@@ -372,7 +372,30 @@ try:
         wait_for(lambda: page.locator("#accounts [data-account]").count() == 0, "an account can be unfollowed")
         page.goto(BASE + "/#/")
 
-        # ---- dark, narrow, errors --------------------------------------------------------
+        # ---- keeping only the newest -------------------------------------------------
+        page.goto(BASE + "/#/repo/github.com/demo/tool")
+        page.wait_for_selector("#follow-keep-source")
+        page.select_option("#follow-keep-source", "1")
+        page.select_option("#follow-keep-releases", "1")
+        wait_for(lambda: repo_json("github.com/demo/tool")["follow"]["keep_source"] == 1 and repo_json("github.com/demo/tool")["follow"]["keep_releases"] == 1, "a project's limits to keep are saved")
+        page.locator(".inspector").screenshot(path=str(a.out / "10-follow.png"))
+        api("release_get", {"id": "github.com/demo/tool", "tag": "v0.9"})
+        wait_for(lambda: any(r["tag"] == "v0.9" and r["picked"] for r in repo_json("github.com/demo/tool")["releases"]), "a release ticked by hand is marked as picked")
+        wait_for(idle, "the picked release is downloaded")
+        new_commit(tool, "version 4\n")
+        make_release("demo", "tool", "v1.3", "2026-03-01T10:00:00Z")
+        page.click("#check-now")
+        wait_for(lambda: [r["tag"] for r in repo_json("github.com/demo/tool")["releases"]] == ["v0.9", "v1.3"], "only the newest release is kept, beside the picked one")
+        check(len(repo_json("github.com/demo/tool")["snapshots"]) == 1 and len(list((lib / "github.com/demo/tool/source").iterdir())) == 1, "only the newest version of the code is kept")
+        check(not (lib / "github.com/demo/tool/releases/v1.1").exists() and (lib / "github.com/demo/tool/releases/v0.9").is_dir(), "older releases' folders are deleted, the picked one stays")
+        recent = page.evaluate("window.__reposync.ctx().api('jobs').then((j) => j.recent)")
+        check("Deleted to stay within the limits" in recent[0]["message"], "Activity says what the limits deleted")
+        page.goto(BASE + "/#/settings")
+        page.select_option("#keep-releases", "3")
+        wait_for(lambda: json.loads((lib / "_library/library.json").read_text())["settings"]["keep_releases"] == 3, "the library's limits are saved")
+        page.goto(BASE + "/#/")
+
+
         page.click("#theme-toggle")
         page.click("#theme-toggle")
         check(page.evaluate("document.documentElement.dataset.theme") == "dark", "the theme can be dark")
