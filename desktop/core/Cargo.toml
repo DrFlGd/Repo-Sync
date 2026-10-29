@@ -1,0 +1,23 @@
+[package]
+name = "reposync-core"
+description = "Library folder, sources, captures and commands for the Repo Sync desktop app"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "reposync_core"
+
+[[bin]]
+name = "reposync-cli"
+path = "src/bin/reposync-cli.rs"
+
+[dependencies]
+ammonia = "4"
+anyhow = "1"
+flate2 = "1"
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+tar = "0.4"
+ureq = { version = "2", features = ["proxy-from-env"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }

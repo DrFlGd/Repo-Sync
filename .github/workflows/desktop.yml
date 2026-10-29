@@ -1,0 +1,203 @@
+name: Desktop
+
+# Builds Repo Sync for Windows, runs the Rust tests and the acceptance test (the
+# page against the app's real backend and a stand-in for GitHub and GitLab), and
+# when everything passes on main publishes a numbered release (v0.1.0, v0.1.1,
+# ...; see tools/set_version.py) with notes taken from CHANGELOG.md's Unreleased
+# section. The Linux build runs only from Run workflow with "Linux too" ticked.
+# Reports and screenshots go to the desktop-ci-<os> branches.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "desktop/**"
+      - "web/**"
+      - "tools/**"
+      - "tests/**"
+      - "CHANGELOG.md"
+      - ".github/workflows/desktop.yml"
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      linux:
+        description: "Linux too (AppImage and .deb)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  version:
+    name: Release number
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        run: |
+          v=$(python3 tools/set_version.py --next)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Version::$v"
+
+  windows:
+    name: Windows app
+    needs: version
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run: { shell: bash }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: desktop }
+      - name: Version ${{ needs.version.outputs.version }}
+        run: python tools/set_version.py "${{ needs.version.outputs.version }}"
+      - name: Check and test the Rust code
+        working-directory: desktop
+        run: |
+          mkdir -p ../ci-out
+          cargo build --release -p reposync-core 2>&1 | tee ../ci-out/core-build.log
+          cargo test --release -p reposync-core 2>&1 | tee ../ci-out/core-test.log
+      - name: Front end
+        run: python tools/build_desktop.py --out build/desktop --fetch-fonts
+      - name: Acceptance test (the page and the app's backend)
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          pip install playwright
+          python -m playwright install chromium 2>&1 | tail -2
+          timeout 900 python tests/desktop_page.py --cli desktop/target/release/reposync-cli.exe --ui build/desktop/ui \
+            --home "$RUNNER_TEMP/pagehome" --out ci-out/page 2>&1 | tee ci-out/desktop-page.log
+      - name: Build the app (NSIS installer)
+        working-directory: desktop
+        run: npx --yes @tauri-apps/cli@2 build --bundles nsis 2>&1 | tee ../ci-out/tauri-build.log
+      - name: Collect bundles
+        if: always()
+        run: |
+          mkdir -p dist
+          cp desktop/target/release/bundle/nsis/*.exe dist/ 2>/dev/null || true
+          cp desktop/target/release/reposync-cli.exe "dist/reposync-cli-${{ needs.version.outputs.version }}-windows-x64.exe" 2>/dev/null || true
+          ls -la dist | tee -a ci-out/bundles.txt
+      - uses: actions/upload-artifact@v4
+        with: { name: bundles-windows, path: dist/, retention-days: 7 }
+      - name: Publish reports to desktop-ci-windows
+        if: always() && github.event_name != 'pull_request'
+        run: |
+          mkdir -p ci-out && cd ci-out
+          echo "${GITHUB_SHA}" > COMMIT
+          git init -q && git checkout -q -b desktop-ci-windows
+          git -c user.name=ci -c user.email=ci@users.noreply.github.com add -A
+          git -c user.name=ci -c user.email=ci@users.noreply.github.com commit -qm "Desktop checks (Windows) for ${GITHUB_SHA::7}"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" desktop-ci-windows
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: reports-windows, path: ci-out/, retention-days: 7 }
+
+  linux:
+    name: Linux app
+    needs: version
+    if: github.event_name == 'workflow_dispatch' && inputs.linux
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    defaults:
+      run: { shell: bash }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: System packages
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libfuse2
+          pip install playwright
+          python -m playwright install --with-deps chromium 2>&1 | tail -2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: desktop }
+      - name: Version ${{ needs.version.outputs.version }}
+        run: python tools/set_version.py "${{ needs.version.outputs.version }}"
+      - name: Check and test the Rust code
+        working-directory: desktop
+        run: |
+          mkdir -p ../ci-out
+          cargo test --release -p reposync-core 2>&1 | tee ../ci-out/core-test.log
+          cargo build --release -p reposync-core
+      - name: Front end
+        run: python tools/build_desktop.py --out build/desktop --fetch-fonts
+      - name: Acceptance test
+        run: |
+          timeout 600 python tests/desktop_page.py --cli desktop/target/release/reposync-cli --ui build/desktop/ui \
+            --home "$RUNNER_TEMP/pagehome" --out ci-out/page 2>&1 | tee ci-out/desktop-page.log
+      - name: Build the app (AppImage, deb)
+        working-directory: desktop
+        run: npx --yes @tauri-apps/cli@2 build --bundles appimage,deb 2>&1 | tee ../ci-out/tauri-build.log
+      - name: Collect bundles
+        if: always()
+        run: |
+          mkdir -p dist
+          find desktop/target/release/bundle -maxdepth 2 \( -name '*.AppImage' -o -name '*.deb' \) -exec cp {} dist/ \; || true
+          ls -la dist | tee -a ci-out/bundles.txt
+      - uses: actions/upload-artifact@v4
+        with: { name: bundles-linux, path: dist/, retention-days: 7 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: reports-linux, path: ci-out/, retention-days: 7 }
+
+  release:
+    name: Release
+    needs: [version, windows, linux]
+    if: >-
+      always() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' &&
+      needs.version.result == 'success' && needs.windows.result == 'success' &&
+      contains(fromJSON('["success","skipped"]'), needs.linux.result)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/download-artifact@v4
+        with: { pattern: bundles-*, path: dist, merge-multiple: true }
+      - name: Publish v${{ needs.version.outputs.version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ needs.version.outputs.version }}
+        run: |
+          ls -la dist
+          prev=$(git tag -l 'v[0-9]*' --sort=-v:refname | head -1)
+          {
+            echo "**Windows:** the \`-setup.exe\` (unsigned, so SmartScreen asks once: More info → Run anyway). \`reposync-cli\` is the same backend without a window, for scheduled checks while the app is closed."
+            if ls dist/*.deb dist/*.AppImage > /dev/null 2>&1; then
+              echo "**Linux:** the \`.deb\` or the \`.AppImage\`."
+            fi
+            echo
+            awk '/^## Unreleased/{on=1; next} on && /^## /{exit} on' CHANGELOG.md | sed '/./,$!d' > unreleased.md
+            if [ -s unreleased.md ]; then
+              echo "### What's new"
+              echo
+              cat unreleased.md
+            elif [ -n "$prev" ]; then
+              echo "### Changes since $prev"
+              git log --no-merges --format='- %s' "$prev..$GITHUB_SHA"
+            else
+              echo "First release."
+            fi
+          } > notes.md
+          gh release create "v$V" dist/* --title "Repo Sync $V" --notes-file notes.md --target "$GITHUB_SHA" --latest
+          echo "::notice title=Released::Repo Sync $V"
