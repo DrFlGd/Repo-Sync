@@ -207,8 +207,18 @@ function Inspector({ repo, reload }) {
   const s = repo.summary;
   const d = repo.details;
   const id = s.id;
-  const save = async (follow) => { try { await api("follow_set", { id, follow }); reload(); loadRepos(); } catch (e) { toast(errText(e), 6000); } };
-  const saveTags = async (tags) => { try { await api("tags_set", { id, tags }); reload(); loadRepos(); } catch (e) { toast(errText(e), 6000); } };
+  // one save at a time, in the order made (requests sent together can land out of
+  // order), and the page reloaded once the last one is in
+  const queue = useRef({ last: Promise.resolve(), pending: 0 });
+  const send = (cmd, args) => {
+    const q = queue.current;
+    q.pending++;
+    q.last = q.last.then(() => api(cmd, args)).catch((e) => toast(errText(e), 6000)).finally(() => {
+      if (--q.pending === 0) { reload(); loadRepos(); }
+    });
+  };
+  const save = (follow) => send("follow_set", { id, follow });
+  const saveTags = (tags) => send("tags_set", { id, tags });
   const latestSnap = repo.snapshots[repo.snapshots.length - 1];
   return html`<aside class="inspector" aria-label="Details">
     <section>
