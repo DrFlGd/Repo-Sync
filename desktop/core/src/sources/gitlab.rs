@@ -37,6 +37,22 @@ impl GitLab {
         let url = format!("{}{path}", self.project());
         self.client.json(&url, &self.headers_for(&url), "GitLab", what)
     }
+
+    /// A list the API gives a page at a time, up to `limit` entries.
+    fn pages(&self, path: &str, limit: usize, what: &str) -> Result<Vec<Value>> {
+        let sep = if path.contains('?') { '&' } else { '?' };
+        let mut out = vec![];
+        for page in 1.. {
+            let v = self.get(&format!("{path}{sep}per_page=100&page={page}"), what)?;
+            let a = v.as_array().cloned().unwrap_or_default();
+            let n = a.len();
+            out.extend(a);
+            if n < 100 || out.len() >= limit {
+                break;
+            }
+        }
+        Ok(out)
+    }
 }
 
 impl Source for GitLab {
@@ -88,31 +104,41 @@ impl Source for GitLab {
     }
 
     fn latest_release(&self, prereleases: bool) -> Result<Option<Release>> {
-        let list = self.get("/releases?per_page=10&order_by=released_at&sort=desc", "the releases")?;
-        let Some(arr) = list.as_array() else { return Ok(None) };
         // GitLab has no pre-releases; an "upcoming" release (dated in the future) is the nearest thing
-        let pick = arr.iter().find(|r| prereleases || !r["upcoming_release"].as_bool().unwrap_or(false));
-        Ok(pick.map(|v| Release {
-            tag: s(&v["tag_name"]),
-            name: s(&v["name"]),
-            published: v["released_at"].as_str().map(String::from).unwrap_or_else(|| s(&v["created_at"])),
-            prerelease: v["upcoming_release"].as_bool().unwrap_or(false),
-            notes: s(&v["description"]),
-            web_url: s(&v["_links"]["self"]),
-            assets: v["assets"]["links"]
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .map(|x| Asset {
-                            name: s(&x["name"]),
-                            size: 0,
-                            url: x["direct_asset_url"].as_str().filter(|u| !u.is_empty()).map(String::from).unwrap_or_else(|| s(&x["url"])),
-                            updated: String::new(),
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
-        }))
+        Ok(self.releases(50)?.into_iter().find(|r| prereleases || !r.prerelease))
+    }
+
+    fn releases(&self, limit: usize) -> Result<Vec<Release>> {
+        let list = self.pages("/releases?order_by=released_at&sort=desc", limit, "the releases")?;
+        Ok(list
+            .iter()
+            .take(limit)
+            .map(|v| Release {
+                tag: s(&v["tag_name"]),
+                name: s(&v["name"]),
+                published: v["released_at"].as_str().map(String::from).unwrap_or_else(|| s(&v["created_at"])),
+                prerelease: v["upcoming_release"].as_bool().unwrap_or(false),
+                notes: s(&v["description"]),
+                web_url: s(&v["_links"]["self"]),
+                assets: v["assets"]["links"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .map(|x| Asset {
+                                name: s(&x["name"]),
+                                size: 0,
+                                url: x["direct_asset_url"].as_str().filter(|u| !u.is_empty()).map(String::from).unwrap_or_else(|| s(&x["url"])),
+                                updated: String::new(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            })
+            .collect())
+    }
+
+    fn branches(&self) -> Result<Vec<String>> {
+        Ok(self.pages("/repository/branches", 300, "the branches")?.iter().map(|b| s(&b["name"])).filter(|b| !b.is_empty()).collect())
     }
 
     fn asset_download(&self, asset: &Asset) -> (String, Vec<Header>) {

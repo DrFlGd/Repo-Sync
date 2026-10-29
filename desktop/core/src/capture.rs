@@ -8,7 +8,7 @@ use crate::http::{Client, Progress};
 use crate::launch::for_this_computer;
 use crate::library::{AssetRecord, Files, ReleaseRecord, Repo, Snapshot, PARTIAL_DIR};
 use crate::sources::{Release, Source};
-use crate::util::{dir_size, now_iso, now_unix, safe_name, stamp_from_unix};
+use crate::util::{dir_size, now_iso, now_unix, safe_name, stamp_from_unix, unix_from_iso};
 use anyhow::{bail, Context, Result};
 use std::path::Path;
 use std::sync::Mutex;
@@ -134,9 +134,36 @@ pub fn find_readme(dir: &Path) -> String {
     String::new()
 }
 
+/// Download one release the user picked, by its tag (Releases, "Keep"). `repo`
+/// is updated in place; the caller saves it.
+#[allow(clippy::too_many_arguments)]
+pub fn capture_tag(repo: &mut Repo, folder: &Path, tag: &str, src: &dyn Source, client: &Client, progress: &Progress, stage: &Stage, limits: &Limits) -> Result<Outcome> {
+    let partial = folder.join(PARTIAL_DIR);
+    let _ = std::fs::remove_dir_all(&partial);
+    std::fs::create_dir_all(&partial).with_context(|| format!("couldn't make {}", partial.display()))?;
+    set(stage, format!("Looking for release {tag}"));
+    let rel = src.releases(RELEASES_LISTED)?.into_iter().find(|r| r.tag == tag).with_context(|| format!("the server no longer lists release {tag}"))?;
+    let res = store_release(repo, folder, rel, src, client, progress, stage, limits);
+    let _ = std::fs::remove_dir_all(&partial);
+    let tag = res?;
+    if tag.is_some() {
+        repo.last_changed = now_iso();
+    }
+    Ok(Outcome { snapshot: None, release: tag, warnings: vec![] })
+}
+
+/// How many of a project's releases the app asks the server for.
+pub const RELEASES_LISTED: usize = 300;
+
 fn capture_release(repo: &mut Repo, folder: &Path, src: &dyn Source, client: &Client, progress: &Progress, stage: &Stage, limits: &Limits) -> Result<Option<String>> {
     set(stage, "Looking for the latest release");
     let Some(rel) = src.latest_release(repo.follow.prereleases)? else { return Ok(None) };
+    store_release(repo, folder, rel, src, client, progress, stage, limits)
+}
+
+/// Download `rel` into its own folder under releases/, unless it's kept already.
+#[allow(clippy::too_many_arguments)]
+fn store_release(repo: &mut Repo, folder: &Path, rel: Release, src: &dyn Source, client: &Client, progress: &Progress, stage: &Stage, limits: &Limits) -> Result<Option<String>> {
     if rel.tag.is_empty() {
         return Ok(None);
     }
@@ -160,7 +187,10 @@ fn capture_release(repo: &mut Repo, folder: &Path, src: &dyn Source, client: &Cl
     std::fs::create_dir_all(dest.parent().unwrap())?;
     std::fs::rename(&tmp, &dest).with_context(|| format!("couldn't move the release into {}", dest.display()))?;
     let (bytes, _) = dir_size(&dest);
-    repo.releases.push(ReleaseRecord {
+    // kept in the order they were published, so the last is the newest even when
+    // an older one is picked later
+    let when = |r: &ReleaseRecord| unix_from_iso(&r.published).or_else(|| unix_from_iso(&r.captured)).unwrap_or(0);
+    let record = ReleaseRecord {
         folder: name,
         tag: rel.tag.clone(),
         name: rel.name.clone(),
@@ -170,7 +200,9 @@ fn capture_release(repo: &mut Repo, folder: &Path, src: &dyn Source, client: &Cl
         web_url: rel.web_url.clone(),
         assets,
         bytes,
-    });
+    };
+    let at = repo.releases.iter().position(|r| when(r) > when(&record)).unwrap_or(repo.releases.len());
+    repo.releases.insert(at, record);
     Ok(Some(rel.tag))
 }
 

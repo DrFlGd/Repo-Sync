@@ -67,6 +67,10 @@ def releases(owner, name):
     return out
 
 
+def branches(repo):
+    return [{"name": b} for b in git(repo, "branch", "--format=%(refname:short)").split()]
+
+
 def commit_json(repo, ref):
     sha, date, author, msg = git(repo, "log", "-1", "--format=%H%x00%cI%x00%an%x00%B", ref).strip("\n").split("\x00")
     return sha, date, author, msg
@@ -126,6 +130,8 @@ class H(BaseHTTPRequestHandler):
             except subprocess.CalledProcessError:
                 return self.send(404, {"message": "No commit found"})
             return self.send(200, {"sha": sha, "commit": {"committer": {"date": date}, "author": {"name": author}, "message": msg}})
+        if rest == ["branches"]:
+            return self.send(200, branches(repo))
         if rest[0] == "zipball" and len(rest) == 2:
             return self.zip_of(repo, owner, name, rest[1])
         if rest[0] == "releases":
@@ -162,6 +168,8 @@ class H(BaseHTTPRequestHandler):
         if rest[:2] == ["repository", "commits"] and len(rest) == 3:
             sha, date, author, msg = commit_json(repo, head if rest[2] in ("main", "HEAD") else rest[2])
             return self.send(200, {"id": sha, "committed_date": date, "author_name": author, "message": msg, "title": msg.splitlines()[0]})
+        if rest == ["repository", "branches"]:
+            return self.send(200, branches(repo))
         if rest == ["repository", "archive.zip"]:
             return self.zip_of(repo, owner, name, q.get("sha", [head])[0])
         if rest == ["releases"]:

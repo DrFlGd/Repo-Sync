@@ -102,6 +102,9 @@ textarea { resize: vertical; font-family: var(--font-mono); font-size: 13px; lin
 input:hover, select:hover, textarea:hover { border-color: var(--graphite); }
 input[type="checkbox"], input[type="radio"] { width: 16px; height: 16px; accent-color: var(--tool); margin: 0; padding: 0; flex: none; }
 label.check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+label.check.inline { display: inline-flex; margin-left: 6px; }
+.available { margin-bottom: 28px; }
+.available .hint { margin: 0 0 10px; }
 .field { display: grid; gap: 4px; }
 .field > span { font-size: 13px; font-weight: 600; }
 .hint { font-size: 13px; color: var(--graphite); }

@@ -35,6 +35,24 @@ pub enum JobKind {
         #[serde(rename = "project")]
         id: String,
     },
+    /// Download one release the user picked (Releases, "Keep").
+    Release {
+        #[serde(rename = "project")]
+        id: String,
+        tag: String,
+    },
+}
+
+impl JobKind {
+    /// Whether `other` does the same work, so it isn't queued twice. A release
+    /// picked by hand sits beside a check of the same project.
+    fn same(&self, other: &JobKind) -> bool {
+        match (self, other) {
+            (JobKind::Release { tag: a, .. }, JobKind::Release { tag: b, .. }) => a == b,
+            (JobKind::Release { .. }, _) | (_, JobKind::Release { .. }) => false,
+            _ => true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -208,6 +226,18 @@ impl App {
                     r.notes = notes;
                     Ok(())
                 })
+            }
+            "releases_available" => self.releases_available(&id()?),
+            "release_get" => {
+                let id = id()?;
+                let tag = a["tag"].as_str().filter(|t| !t.is_empty()).context("no release given")?.to_string();
+                self.with_lib(|l| l.repos.get(&id).map(|_| ()).context("That project isn't in the library."))?;
+                Ok(json!({ "job": self.enqueue(JobKind::Release { id: id.clone(), tag }, id, "you") }))
+            }
+            "branches" => {
+                let id = id()?;
+                let source = self.with_lib(|l| Ok(l.repos.get(&id).context("That project isn't in the library.")?.source.clone()))?;
+                Ok(json!(sources::open(&source, &self.tokens(), self.client.clone()).branches()?))
             }
             "remove" => self.remove(&id()?),
             "version_delete" => self.version_delete(&id()?, a["kind"].as_str().unwrap_or(""), a["folder"].as_str().unwrap_or("")),
@@ -589,7 +619,7 @@ impl App {
     /// Queue a job, unless the same one is queued or running. Its id, or None.
     fn enqueue(&self, kind: JobKind, repo: String, by: &'static str) -> Option<u64> {
         let mut j = self.jobs.lock().unwrap();
-        if j.queue.iter().any(|q| q.repo == repo) || j.current.as_ref().is_some_and(|c| c.job.repo == repo) {
+        if j.queue.iter().any(|q| q.repo == repo && q.kind.same(&kind)) || j.current.as_ref().is_some_and(|c| c.job.repo == repo && c.job.kind.same(&kind)) {
             return None;
         }
         j.next += 1;
@@ -641,6 +671,7 @@ impl App {
             let res = match &job.kind {
                 JobKind::Add { input, follow } => self.run_add(input, follow, &progress, &stage),
                 JobKind::Check { id } => self.run_check(id, &progress, &stage),
+                JobKind::Release { id, tag } => self.run_release(id, tag, &progress, &stage),
             };
             let mut j = self.jobs.lock().unwrap();
             j.current = None;
@@ -691,6 +722,57 @@ impl App {
         let res = capture::update(&mut repo, &folder, src.as_ref(), &self.client, progress, stage, &self.limits());
         self.store(id, &repo, &res)?;
         res
+    }
+
+    fn run_release(&self, id: &str, tag: &str, progress: &Progress, stage: &capture::Stage) -> Result<Outcome> {
+        let (mut repo, folder) = self.with_lib(|l| Ok((l.repos.get(id).cloned().context("That project isn't in the library any more.")?, l.folder_of(id))))?;
+        let src = sources::open(&repo.source, &self.tokens(), self.client.clone());
+        let res = capture::capture_tag(&mut repo, &folder, tag, src.as_ref(), &self.client, progress, stage, &self.limits());
+        if res.is_ok() {
+            self.with_lib(|l| {
+                let Some(cur) = l.repos.get(id) else { return Ok(()) };
+                let mut r = cur.clone();
+                r.releases = repo.releases.clone();
+                r.last_changed = repo.last_changed.clone();
+                l.save_repo(&r)?;
+                l.repos.insert(id.to_string(), r);
+                Ok(())
+            })?;
+        }
+        res
+    }
+
+    /// Every release the server lists for a project, newest first, with which are
+    /// kept and which are waiting to be downloaded.
+    fn releases_available(&self, id: &str) -> Result<Value> {
+        let (repo, folder) = self.with_lib(|l| Ok((l.repos.get(id).cloned().context("That project isn't in the library.")?, l.folder_of(id))))?;
+        let src = sources::open(&repo.source, &self.tokens(), self.client.clone());
+        let list = src.releases(capture::RELEASES_LISTED)?;
+        let waiting: Vec<String> = {
+            let j = self.jobs.lock().unwrap();
+            j.queue.iter().chain(j.current.as_ref().map(|c| &c.job)).filter(|q| q.repo == id).filter_map(|q| match &q.kind {
+                JobKind::Release { tag, .. } => Some(tag.clone()),
+                _ => None,
+            }).collect()
+        };
+        let out: Vec<Value> = list
+            .iter()
+            .map(|r| {
+                let kept = repo.releases.iter().rev().find(|k| k.tag == r.tag && folder.join("releases").join(&k.folder).is_dir());
+                json!({
+                    "tag": r.tag,
+                    "name": r.name,
+                    "published": r.published,
+                    "prerelease": r.prerelease,
+                    "web_url": r.web_url,
+                    "files": r.assets.len(),
+                    "bytes": r.assets.iter().map(|a| a.size).sum::<u64>(),
+                    "kept": kept.map(|k| k.folder.clone()),
+                    "waiting": waiting.contains(&r.tag),
+                })
+            })
+            .collect();
+        Ok(json!(out))
     }
 
     /// Save what a check found into the project as it is now (its settings may

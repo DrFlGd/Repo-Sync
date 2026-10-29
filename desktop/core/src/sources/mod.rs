@@ -201,6 +201,10 @@ pub trait Source: Send + Sync {
     fn source_zip(&self, sha: &str) -> (String, Vec<Header>);
     /// The latest release (or pre-release, with `prereleases`), None when there are none.
     fn latest_release(&self, prereleases: bool) -> Result<Option<Release>>;
+    /// The project's releases (pre-releases too, never drafts), newest first, at most `limit`.
+    fn releases(&self, limit: usize) -> Result<Vec<Release>>;
+    /// The names of the project's branches.
+    fn branches(&self) -> Result<Vec<String>>;
     /// Where to download one of a release's files.
     fn asset_download(&self, asset: &Asset) -> (String, Vec<Header>);
 }

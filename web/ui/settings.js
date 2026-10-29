@@ -2,7 +2,7 @@
 // tokens for the servers, and the theme.
 import { html, useEffect, useState } from "../lib/html.js";
 import { useStore } from "../lib/store.js";
-import { ui, api, ctx, toast, errText, setPref, loadRepos } from "./state.js";
+import { ui, api, ctx, toast, errText, setPref, loadRepos, fileChoices } from "./state.js";
 import { Icon } from "./icons.js";
 import { ago, when } from "../lib/format.js";
 
@@ -69,7 +69,7 @@ export function SettingsPage() {
         <label class="check"><input type="checkbox" checked=${lib.new_follow.prereleases} onChange=${(e) => setNew({ prereleases: e.target.checked })} /> including pre-releases</label>
         <label class="field"><span>Release files to keep</span>
           <select value=${lib.new_follow.files} onChange=${(e) => setNew({ files: e.target.value })}>
-            <option value="all">Every file</option><option value="this-computer">Only files for this computer</option><option value="none">Only the notes</option></select></label>
+            ${fileChoices().map(([k, l]) => html`<option value=${k}>${l}</option>`)}</select></label>
       </div></section>
       <section><h2 class="section-head">Tokens</h2><div class="panel">
         <p class="hint">Without a token GitHub allows 60 requests an hour (a check takes 3 or 4), and private projects can't be reached. A token with read access raises that to 5,000. Tokens stay on this computer, never in the library.</p>

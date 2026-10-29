@@ -30,6 +30,21 @@ impl GitHub {
         self.client.json(&format!("{}/repos/{}{path}", self.api, self.r.path), &self.headers("application/vnd.github+json"), "GitHub", what)
     }
 
+    /// A list the API gives a page at a time, up to `limit` entries.
+    fn pages(&self, path: &str, limit: usize, what: &str) -> Result<Vec<Value>> {
+        let mut out = vec![];
+        for page in 1.. {
+            let v = self.get(&format!("{path}?per_page=100&page={page}"), what)?;
+            let a = v.as_array().cloned().unwrap_or_default();
+            let n = a.len();
+            out.extend(a);
+            if n < 100 || out.len() >= limit {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
     fn release(v: &Value) -> Release {
         Release {
             tag: s(&v["tag_name"]),
@@ -91,8 +106,16 @@ impl Source for GitHub {
             // GitHub's "latest" is the newest release that isn't a draft or a pre-release
             return Ok(self.client.json_opt(&format!("{url}/latest"), &h, "GitHub", "the latest release")?.map(|v| Self::release(&v)));
         }
-        let list = self.client.json(&format!("{url}?per_page=10"), &h, "GitHub", "the releases")?;
-        Ok(list.as_array().and_then(|a| a.iter().find(|r| !r["draft"].as_bool().unwrap_or(false))).map(Self::release))
+        Ok(self.releases(1)?.into_iter().next())
+    }
+
+    fn releases(&self, limit: usize) -> Result<Vec<Release>> {
+        let list = self.pages("/releases", limit, "the releases")?;
+        Ok(list.iter().filter(|r| !r["draft"].as_bool().unwrap_or(false)).take(limit).map(Self::release).collect())
+    }
+
+    fn branches(&self) -> Result<Vec<String>> {
+        Ok(self.pages("/branches", 300, "the branches")?.iter().map(|b| s(&b["name"])).filter(|b| !b.is_empty()).collect())
     }
 
     fn asset_download(&self, asset: &Asset) -> (String, Vec<Header>) {

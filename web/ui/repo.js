@@ -3,7 +3,7 @@
 // and its tags.
 import { html, useEffect, useRef, useState } from "../lib/html.js";
 import { useStore } from "../lib/store.js";
-import { ui, api, toast, errText, loadRepos } from "./state.js";
+import { ui, api, toast, errText, loadRepos, fileChoices, filesHint } from "./state.js";
 import { Icon } from "./icons.js";
 import { confirmDialog } from "./dialogs.js";
 import { launch, check, openFolder, openUrl } from "./actions.js";
@@ -113,23 +113,69 @@ function Notes({ id, folder }) {
   return html`<div class="notes"><div class="readme" dangerouslySetInnerHTML=${{ __html: doc?.html || "" }}></div></div>`;
 }
 
+// Every release the server lists, with a box to keep each one: ticking downloads
+// it (beside the latest, which checks download by themselves), clearing a kept
+// one deletes its files.
+function Available({ repo, reload, del }) {
+  const id = repo.summary.id;
+  const [list, setList] = useState(null);
+  const [err, setErr] = useState("");
+  const [pre, setPre] = useState(true);
+  const read = () => api("releases_available", { id }).then((l) => { setList(l); setErr(""); }).catch((e) => setErr(errText(e)));
+  useEffect(() => { read(); }, [id, repo.releases.length, repo.summary.status]);
+  const site = KIND[repo.source.kind] || repo.source.host;
+  if (err) return html`<p class="notice error" id="available-error">Couldn't list the releases on ${site}: ${err}</p>`;
+  if (!list) return html`<p class="muted">Asking ${site} for its releases…</p>`;
+  if (!list.length) return html`<p class="muted">${site} lists no releases for this project.</p>`;
+  const npre = list.filter((r) => r.prerelease).length;
+  const shown = pre ? list : list.filter((r) => !r.prerelease || r.kept);
+  const keep = async (r, on) => {
+    if (on) {
+      try { await api("release_get", { id, tag: r.tag }); toast(`Downloading ${r.tag}`); read(); loadRepos(); } catch (e) { toast(errText(e), 6000); }
+    } else if (r.kept) {
+      const k = repo.releases.find((x) => x.folder === r.kept);
+      if (k && (await del(k))) read();
+    }
+  };
+  return html`<section class="available" id="available">
+    <h2 class="section-head">On ${site} <span class="n">${list.length}</span>
+      <button type="button" class="ghost small" id="available-refresh" title=${`Ask ${site} for its releases again`} onClick=${read}>${Icon.refresh(13)}</button></h2>
+    <p class="hint">Tick a release to download and keep it. Each check also downloads the newest release by itself (see Follow, on the right). Clearing a tick deletes that release's files.
+      ${npre > 0 && html` <label class="check inline"><input type="checkbox" id="available-pre" checked=${pre} onChange=${(e) => setPre(e.target.checked)} /> Show ${npre} pre-release${npre === 1 ? "" : "s"}</label>`}</p>
+    <table class="list">
+      <thead><tr><th>Keep</th><th>Release</th><th>Published</th><th class="num">Files</th><th class="num">Size</th></tr></thead>
+      <tbody>${shown.map((r) => html`<tr key=${r.tag} data-tag=${r.tag}>
+        <td><input type="checkbox" aria-label=${`Keep ${r.tag}`} checked=${!!r.kept || r.waiting} disabled=${r.waiting} onChange=${(e) => keep(r, e.target.checked)} /></td>
+        <td><span class="name">${r.name && r.name !== r.tag ? r.name : r.tag}</span>
+          ${r.prerelease && html` <span class="badge warn">pre-release</span>`}
+          ${r.kept && html` <span class="badge ok">kept</span>`}
+          ${r.waiting && html` <span class="badge working">downloading…</span>`}
+          ${r.name && r.name !== r.tag && html`<div class="sub">${r.tag}</div>`}</td>
+        <td class="date" title=${when(r.published)}>${day(r.published)}</td>
+        <td class="num">${r.files}</td>
+        <td class="num">${r.bytes ? bytes(r.bytes) : ""}</td></tr>`)}</tbody>
+    </table>
+  </section>`;
+}
+
 function Releases({ repo, reload }) {
   const id = repo.summary.id;
   const [open, setOpen] = useState(() => new Set());
   const list = [...repo.releases].reverse();
-  if (!list.length) {
-    return html`<p class="muted">${repo.follow.releases ? "No release has been captured yet. The project may not publish releases." : "This project doesn't follow its releases. Tick “Releases” on the right to capture them."}</p>`;
-  }
   const del = async (r) => {
-    if (!(await confirmDialog({ title: `Delete ${r.tag}?`, body: `The files of release ${r.tag} (${bytes(r.bytes)}) are deleted from the library. Other releases stay.`, ok: "Delete release" }))) return;
-    try { await api("version_delete", { id, kind: "release", folder: r.folder }); reload(); } catch (e) { toast(errText(e), 6000); }
+    if (!(await confirmDialog({ title: `Delete ${r.tag}?`, body: `The files of release ${r.tag} (${bytes(r.bytes)}) are deleted from the library. Other releases stay.`, ok: "Delete release" }))) return false;
+    try { await api("version_delete", { id, kind: "release", folder: r.folder }); reload(); return true; } catch (e) { toast(errText(e), 6000); return false; }
   };
   const toggle = (f) => setOpen((s) => { const n = new Set(s); n.has(f) ? n.delete(f) : n.add(f); return n; });
-  return html`<div class="versions" id="releases">${list.map((r, i) => html`<section class="release" key=${r.folder} data-release=${r.folder}>
+  return html`<div>
+  <${Available} repo=${repo} reload=${reload} del=${del} />
+  <h2 class="section-head">Kept in the library <span class="n">${list.length}</span></h2>
+  ${!list.length && html`<p class="muted">${repo.follow.releases ? "No release has been captured yet." : "This project doesn't follow its releases: tick “Releases” on the right, or a release above."}</p>`}
+  <div class="versions" id="releases">${list.map((r, i) => html`<section class="release" key=${r.folder} data-release=${r.folder}>
     <div class="release-head">
       <h3>${r.name && r.name !== r.tag ? `${r.name}` : r.tag}</h3>
       ${r.name && r.name !== r.tag && html`<span class="mono muted">${r.tag}</span>`}
-      ${i === 0 && html`<span class="badge plain">latest</span>`}
+      ${i === 0 && html`<span class="badge plain">newest kept</span>`}
       ${r.prerelease && html`<span class="badge warn">pre-release</span>`}
       <span class="spacer" style="flex:1"></span>
       <button type="button" class="small" title="Start this release's program" disabled=${!r.assets.some((a) => a.file)} onClick=${() => launch(id, { folder: r.folder })}>${Icon.play(13)} Launch</button>
@@ -146,7 +192,7 @@ function Releases({ repo, reload }) {
       : html`<p class="hint">This release has no files of its own, only its notes.</p>`}
     <div><button type="button" class="ghost small" aria-expanded=${open.has(r.folder) ? "true" : "false"} onClick=${() => toggle(r.folder)}>${open.has(r.folder) ? "Hide the notes" : "Show the notes"}</button></div>
     ${open.has(r.folder) && html`<${Notes} id=${id} folder=${r.folder} />`}
-  </section>`)}</div>`;
+  </section>`)}</div></div>`;
 }
 
 const CHECKS = [
@@ -158,7 +204,16 @@ const CHECKS = [
   [0, "Only by hand"],
 ];
 
+// The project's branches, for the Branch list (null while asking, [] when the
+// server can't say: then the branch is typed).
+function useBranches(id) {
+  const [list, setList] = useState(null);
+  useEffect(() => { setList(null); api("branches", { id }).then(setList).catch(() => setList([])); }, [id]);
+  return list;
+}
+
 function Following({ repo, save }) {
+  const branches = useBranches(repo.summary.id);
   // kept here too, so a second change made before the first is saved builds on it
   const [f, setF] = useState(repo.follow);
   const latest = useRef(repo.follow);
@@ -172,13 +227,18 @@ function Following({ repo, save }) {
   return html`<div class="follow" id="follow">
     <label class="check"><input type="checkbox" id="follow-source" checked=${f.source} onChange=${(e) => set({ source: e.target.checked })} /> The code</label>
     <div class="row" style="padding-left:24px"><span class="muted">Branch</span>
-      <input type="text" placeholder=${repo.details.default_branch || "default"} value=${f.branch} disabled=${!f.source}
-        onChange=${(e) => set({ branch: e.target.value.trim() })} aria-label="Branch to follow" /></div>
-    <label class="check"><input type="checkbox" id="follow-releases" checked=${f.releases} onChange=${(e) => set({ releases: e.target.checked })} /> Releases</label>
+      ${branches && branches.length
+        ? html`<select aria-label="Branch to follow" id="follow-branch" value=${f.branch} disabled=${!f.source} onChange=${(e) => set({ branch: e.target.value })}>
+            <option value="">Default${repo.details.default_branch ? ` (${repo.details.default_branch})` : ""}</option>
+            ${[...new Set([...(f.branch && !branches.includes(f.branch) ? [f.branch] : []), ...branches])].filter((b) => b !== repo.details.default_branch || f.branch === b).map((b) => html`<option value=${b}>${b}</option>`)}</select>`
+        : html`<input type="text" placeholder=${branches ? repo.details.default_branch || "default" : "Reading the branches…"} value=${f.branch} disabled=${!f.source}
+            onChange=${(e) => set({ branch: e.target.value.trim() })} aria-label="Branch to follow" />`}</div>
+    <label class="check"><input type="checkbox" id="follow-releases" checked=${f.releases} onChange=${(e) => set({ releases: e.target.checked })} /> The newest release</label>
     <label class="check" style="padding-left:24px"><input type="checkbox" checked=${f.prereleases} disabled=${!f.releases} onChange=${(e) => set({ prereleases: e.target.checked })} /> including pre-releases</label>
     <div class="row" style="padding-left:24px">
       <select aria-label="Release files to keep" value=${f.files} disabled=${!f.releases} onChange=${(e) => set({ files: e.target.value })}>
-        <option value="all">Every file</option><option value="this-computer">Only files for this computer</option><option value="none">Only the notes</option></select></div>
+        ${fileChoices().map(([k, l]) => html`<option value=${k}>${l}</option>`)}</select></div>
+    ${f.releases && f.files === "this-computer" && html`<p class="hint" style="padding-left:24px">${filesHint()}</p>`}
     <div class="row"><span class="muted">Check</span>
       <select id="follow-every" aria-label="How often to check" value=${f.every_hours == null ? "" : String(f.every_hours)}
         onChange=${(e) => set({ every_hours: e.target.value === "" ? null : Number(e.target.value) })}>
@@ -197,7 +257,8 @@ function Tags({ repo, saveTags }) {
   };
   return html`<div>
     <ul class="chips">${repo.tags.map((t) => html`<li key=${t} class="chip tag">${t}<span class="x" role="button" tabindex="0" title=${`Remove ${t}`} onClick=${() => saveTags(repo.tags.filter((x) => x !== t))}>×</span></li>`)}
-      ${!repo.tags.length && html`<li class="hint">Tags of your own sort the library (they're listed in the menu).</li>`}</ul>
+      </ul>
+    <p class="hint">Your own labels for sorting the library (they're listed in the menu). They aren't the project's git tags or topics.</p>
     <form class="tag-edit" onSubmit=${add}><input id="tag-input" type="text" placeholder="Add a tag" value=${text} onInput=${(e) => setText(e.target.value)} />
       <button type="submit" class="small">Add</button></form>
   </div>`;
@@ -243,7 +304,7 @@ function Inspector({ repo, reload }) {
       </dl>
     </section>
     ${d.topics.length > 0 && html`<section><h2>Topics</h2><ul class="chips">${d.topics.map((t) => html`<li class="chip" key=${t}>${t}</li>`)}</ul></section>`}
-    <section><h2>Tags</h2><${Tags} repo=${repo} saveTags=${saveTags} /></section>
+    <section><h2>Your tags</h2><${Tags} repo=${repo} saveTags=${saveTags} /></section>
     <section><h2>Follow</h2><${Following} repo=${repo} save=${save} /></section>
   </aside>`;
 }

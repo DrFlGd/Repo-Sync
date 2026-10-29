@@ -1,7 +1,7 @@
 // Dialogs: Add projects (one link or many), and asking before something is removed.
 import { html, useEffect, useRef, useState } from "../lib/html.js";
 import { useStore } from "../lib/store.js";
-import { ui, api, toast, errText, poke } from "./state.js";
+import { ui, api, toast, errText, poke, fileChoices } from "./state.js";
 import { Icon } from "./icons.js";
 
 export const openAdd = (text = "") => ui.set({ dialog: { type: "add", text } });
@@ -11,11 +11,6 @@ export function confirmDialog({ title, body, ok = "Remove", danger = true }) {
   return new Promise((resolve) => ui.set({ dialog: { type: "confirm", title, body, ok, danger, resolve } }));
 }
 
-const FILES = [
-  ["all", "Every file"],
-  ["this-computer", "Only files for this computer"],
-  ["none", "Only the notes"],
-];
 
 function AddDialog({ text }) {
   const [value, setValue] = useState(text || "");
@@ -67,11 +62,11 @@ function AddDialog({ text }) {
     ${follow && html`<div class="options">
       <div class="row">
         <label class="check"><input type="checkbox" id="add-source" checked=${follow.source} onChange=${(e) => set({ source: e.target.checked })} /> The code (default branch)</label>
-        <label class="check"><input type="checkbox" id="add-releases" checked=${follow.releases} onChange=${(e) => set({ releases: e.target.checked })} /> The latest release</label>
+        <label class="check"><input type="checkbox" id="add-releases" checked=${follow.releases} onChange=${(e) => set({ releases: e.target.checked })} /> The newest release</label>
         <label class="check"><input type="checkbox" checked=${follow.prereleases} disabled=${!follow.releases} onChange=${(e) => set({ prereleases: e.target.checked })} /> including pre-releases</label>
       </div>
       <div class="row"><label class="field" style="flex:1"><span>Release files to keep</span>
-        <select id="add-files" value=${follow.files} disabled=${!follow.releases} onChange=${(e) => set({ files: e.target.value })}>${FILES.map(([k, l]) => html`<option value=${k}>${l}</option>`)}</select></label></div>
+        <select id="add-files" value=${follow.files} disabled=${!follow.releases} onChange=${(e) => set({ files: e.target.value })}>${fileChoices().map(([k, l]) => html`<option value=${k}>${l}</option>`)}</select></label></div>
       <p class="hint">New versions are captured on the library's schedule (Settings), each beside the ones before.</p>
     </div>`}
     ${err && html`<p class="notice error">${err}</p>`}

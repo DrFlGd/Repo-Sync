@@ -32,6 +32,22 @@ impl Gitea {
         let url = format!("{}/repos/{}{path}", self.api, self.r.path);
         self.client.json(&url, &self.headers_for(&url), "the server", what)
     }
+
+    /// A list the API gives a page at a time (50 a page, Gitea's usual most), up to `limit` entries.
+    fn pages(&self, path: &str, limit: usize, what: &str) -> Result<Vec<Value>> {
+        let sep = if path.contains('?') { '&' } else { '?' };
+        let mut out = vec![];
+        for page in 1.. {
+            let v = self.get(&format!("{path}{sep}limit=50&page={page}"), what)?;
+            let a = v.as_array().cloned().unwrap_or_default();
+            let n = a.len();
+            out.extend(a);
+            if n < 50 || out.len() >= limit {
+                break;
+            }
+        }
+        Ok(out)
+    }
 }
 
 impl Source for Gitea {
@@ -73,25 +89,36 @@ impl Source for Gitea {
     }
 
     fn latest_release(&self, prereleases: bool) -> Result<Option<Release>> {
-        let list = self.get("/releases?limit=10&draft=false", "the releases")?;
-        let Some(arr) = list.as_array() else { return Ok(None) };
-        let pick = arr.iter().find(|r| !r["draft"].as_bool().unwrap_or(false) && (prereleases || !r["prerelease"].as_bool().unwrap_or(false)));
-        Ok(pick.map(|v| Release {
-            tag: s(&v["tag_name"]),
-            name: s(&v["name"]),
-            published: s(&v["published_at"]),
-            prerelease: v["prerelease"].as_bool().unwrap_or(false),
-            notes: s(&v["body"]),
-            web_url: s(&v["html_url"]),
-            assets: v["assets"]
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .map(|x| Asset { name: s(&x["name"]), size: x["size"].as_u64().unwrap_or(0), url: s(&x["browser_download_url"]), updated: s(&x["created_at"]) })
-                        .collect()
-                })
-                .unwrap_or_default(),
-        }))
+        Ok(self.releases(100)?.into_iter().find(|r| prereleases || !r.prerelease))
+    }
+
+    fn releases(&self, limit: usize) -> Result<Vec<Release>> {
+        let list = self.pages("/releases?draft=false", limit, "the releases")?;
+        Ok(list
+            .iter()
+            .filter(|r| !r["draft"].as_bool().unwrap_or(false))
+            .take(limit)
+            .map(|v| Release {
+                tag: s(&v["tag_name"]),
+                name: s(&v["name"]),
+                published: s(&v["published_at"]),
+                prerelease: v["prerelease"].as_bool().unwrap_or(false),
+                notes: s(&v["body"]),
+                web_url: s(&v["html_url"]),
+                assets: v["assets"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .map(|x| Asset { name: s(&x["name"]), size: x["size"].as_u64().unwrap_or(0), url: s(&x["browser_download_url"]), updated: s(&x["created_at"]) })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            })
+            .collect())
+    }
+
+    fn branches(&self) -> Result<Vec<String>> {
+        Ok(self.pages("/branches", 300, "the branches")?.iter().map(|b| s(&b["name"])).filter(|b| !b.is_empty()).collect())
     }
 
     fn asset_download(&self, asset: &Asset) -> (String, Vec<Header>) {
