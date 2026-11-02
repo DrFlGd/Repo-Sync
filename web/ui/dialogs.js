@@ -1,4 +1,5 @@
-// Dialogs: Add projects (one link or many), and asking before something is removed.
+// Dialogs: Add projects (one link or many), asking before something is removed,
+// asking for a name, and choosing the projects in a collection.
 import { html, useEffect, useRef, useState } from "../lib/html.js";
 import { useStore } from "../lib/store.js";
 import { ui, api, toast, errText, poke, fileChoices } from "./state.js";
@@ -11,6 +12,79 @@ export function confirmDialog({ title, body, ok = "Remove", danger = true }) {
   return new Promise((resolve) => ui.set({ dialog: { type: "confirm", title, body, ok, danger, resolve } }));
 }
 
+/** Ask for a name (a new collection, a new name). Resolves the trimmed text, or null.
+ * `check(text)` may throw to keep the dialog open with its message. */
+export function promptDialog({ title, label, value = "", ok = "Save", placeholder = "", check }) {
+  return new Promise((resolve) => ui.set({ dialog: { type: "prompt", title, label, value, ok, placeholder, check, resolve: (v) => resolve(v || null) } }));
+}
+
+/** Tick the projects a collection holds. Resolves { add: [ids], remove: [ids] } or null. */
+export function chooseDialog({ title, chosen }) {
+  return new Promise((resolve) => ui.set({ dialog: { type: "choose", title, chosen, resolve: (v) => resolve(v || null) } }));
+}
+
+function PromptDialog({ d }) {
+  const [text, setText] = useState(d.value);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const box = useRef(null);
+  useEffect(() => { box.current?.focus(); box.current?.select(); }, []);
+  const go = async (e) => {
+    e.preventDefault();
+    const v = text.trim();
+    if (!v || busy) return;
+    setBusy(true);
+    try {
+      await d.check?.(v);
+      ui.set({ dialog: null });
+      d.resolve(v);
+    } catch (e2) {
+      setErr(errText(e2));
+      setBusy(false);
+    }
+  };
+  return html`<form class="dialog narrow" role="dialog" aria-modal="true" aria-labelledby="prompt-title" onSubmit=${go}>
+    <h2 id="prompt-title">${d.title}</h2>
+    <label class="field"><span>${d.label}</span>
+      <input id="prompt-input" ref=${box} type="text" maxlength="80" placeholder=${d.placeholder} value=${text} onInput=${(e) => { setText(e.target.value); setErr(""); }} /></label>
+    ${err && html`<p class="notice error">${err}</p>`}
+    <div class="buttons">
+      <button type="button" onClick=${() => { ui.set({ dialog: null }); d.resolve(null); }}>Cancel</button>
+      <button type="submit" class="primary" id="prompt-ok" disabled=${!text.trim() || busy}>${d.ok}</button>
+    </div>
+  </form>`;
+}
+
+function ChooseDialog({ d }) {
+  const repos = useStore(ui, (s) => s.repos);
+  const [picked, setPicked] = useState(() => new Set(d.chosen));
+  const [find, setFind] = useState("");
+  const box = useRef(null);
+  useEffect(() => box.current?.focus(), []);
+  const words = find.toLowerCase().split(/\s+/).filter(Boolean);
+  const list = [...repos]
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
+    .filter((r) => words.every((w) => `${r.id} ${r.name} ${r.description}`.toLowerCase().includes(w)));
+  const flip = (id, on) => setPicked((p) => { const n = new Set(p); on ? n.add(id) : n.delete(id); return n; });
+  const before = new Set(d.chosen);
+  const add = [...picked].filter((id) => !before.has(id));
+  const remove = d.chosen.filter((id) => !picked.has(id));
+  const save = (e) => { e.preventDefault(); ui.set({ dialog: null }); d.resolve({ add, remove }); };
+  return html`<form class="dialog" role="dialog" aria-modal="true" aria-labelledby="choose-title" onSubmit=${save}>
+    <h2 id="choose-title">${d.title}</h2>
+    <label class="search wide"><span class="visually-hidden">Find a project</span>${Icon.search(15)}
+      <input id="choose-find" ref=${box} type="search" placeholder="Find a project" value=${find} onInput=${(e) => setFind(e.target.value)} /></label>
+    <ul class="choose" id="choose-list">${list.map((r) => html`<li key=${r.id}><label class="check">
+      <input type="checkbox" data-id=${r.id} checked=${picked.has(r.id)} onChange=${(e) => flip(r.id, e.target.checked)} />
+      <span class="name">${r.name}</span><span class="muted mono">${r.host} / ${r.owner}</span></label></li>`)}
+      ${list.length === 0 && html`<li class="muted">${repos.length ? "Nothing matches." : "The library has no projects yet."}</li>`}</ul>
+    <p class="hint">${picked.size} ${picked.size === 1 ? "project" : "projects"} ticked. A project can be in any number of collections; taking it out of one doesn't remove it from the library.</p>
+    <div class="buttons">
+      <button type="button" onClick=${() => { ui.set({ dialog: null }); d.resolve(null); }}>Cancel</button>
+      <button type="submit" class="primary" id="choose-ok" disabled=${!add.length && !remove.length}>Save</button>
+    </div>
+  </form>`;
+}
 
 function AddDialog({ text }) {
   const [value, setValue] = useState(text || "");
@@ -106,6 +180,9 @@ export function Dialogs() {
   if (!d) return null;
   const dismiss = (e) => { if (e.target === e.currentTarget) { if (d.resolve) d.resolve(false); ui.set({ dialog: null }); } };
   return html`<div class="backdrop" onMouseDown=${dismiss}>
-    ${d.type === "add" ? html`<${AddDialog} text=${d.text} />` : html`<${ConfirmDialog} d=${d} />`}
+    ${d.type === "add" ? html`<${AddDialog} text=${d.text} />`
+      : d.type === "prompt" ? html`<${PromptDialog} d=${d} />`
+      : d.type === "choose" ? html`<${ChooseDialog} d=${d} />`
+      : html`<${ConfirmDialog} d=${d} />`}
   </div>`;
 }

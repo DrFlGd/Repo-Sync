@@ -10,6 +10,7 @@ import { ActivityPage } from "./activity.js";
 import { SettingsPage } from "./settings.js";
 import { AboutPage } from "./about.js";
 import { Dialogs, openAdd } from "./dialogs.js";
+import { newCollection } from "./collections.js";
 import { bytes, ago } from "../lib/format.js";
 
 function NavLink({ href, icon, label, count, active }) {
@@ -17,12 +18,12 @@ function NavLink({ href, icon, label, count, active }) {
     ${icon}<span class="label">${label}</span><span class="nav-count">${count ?? ""}</span></a></li>`;
 }
 
-function FilterLink({ by, value, label, count }) {
+function FilterLink({ by, value, label, count, id }) {
   const f = useStore(ui, (s) => s.filter);
   const page = useStore(ui, (s) => s.route.page);
   const active = page === "library" && f?.by === by && f?.value === value;
   const pick = () => { ui.set({ filter: active ? null : { by, value } }); if (page !== "library") location.hash = "#/"; };
-  return html`<li><button type="button" class=${"nav-link" + (active ? " active" : "")} aria-pressed=${active ? "true" : "false"} onClick=${pick} title=${label}>
+  return html`<li><button type="button" id=${id} class=${"nav-link" + (active ? " active" : "")} aria-pressed=${active ? "true" : "false"} onClick=${pick} title=${label}>
     <span class="label">${label}</span><span class="nav-count">${count}</span></button></li>`;
 }
 
@@ -39,6 +40,7 @@ function Sidebar() {
   const count = useStore(ui, (s) => s.totals.count);
   const jobs = useStore(ui, (s) => s.jobs);
   const query = useStore(ui, (s) => s.query);
+  const collections = useStore(ui, (s) => s.collections);
   const theme = useStore(ui, (s) => s.theme);
   const working = (jobs.current ? 1 : 0) + (jobs.queued?.length || 0);
   // filters count the whole library, not the search
@@ -58,6 +60,12 @@ function Sidebar() {
       <${NavLink} href="#/settings" icon=${Icon.cog(16)} label="Settings" active=${route.page === "settings"} />
       <${NavLink} href="#/about" icon=${Icon.info(16)} label="About" active=${route.page === "about"} />
     </ul>
+    ${count > 0 && html`<div class="filters collections" id="collections">
+      <div class="nav-head">Collections</div>
+      <ul class="nav">${collections.map((c) => html`<${FilterLink} key=${c.id} id=${"collection-" + c.id} by="collection" value=${c.id} label=${c.name} count=${c.repos.length} />`)}
+        <li><button type="button" class="nav-link quiet" id="new-collection" onClick=${() => newCollection().then((c) => { if (c) { ui.set({ filter: { by: "collection", value: c.id } }); location.hash = "#/"; } })}>
+          ${Icon.plus(14)}<span class="label">New collection</span></button></li></ul>
+    </div>`}
     ${groups && html`<div class="filters">
       ${errors > 0 && html`<div class="nav-head">Needs a look</div><ul class="nav"><${FilterLink} by="status" value="error" label="Check failed" count=${errors} /></ul>`}
       ${groups.tags.length > 0 && html`<div class="nav-head">Tags</div><ul class="nav">${groups.tags.map(([v, n]) => html`<${FilterLink} key=${v} by="tag" value=${v} label=${v} count=${n} />`)}</ul>`}

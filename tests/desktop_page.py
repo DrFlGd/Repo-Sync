@@ -9,7 +9,7 @@ tests/forge_mock.py as GitHub and GitLab, runs `reposync-cli serve` with
 tests/tauri_shim.js standing in for Tauri, and drives the page: adding projects,
 the readme and details, launching the latest release, capturing changes upstream
 by hand and on the schedule (keeping every earlier version), following settings,
-tags, search, removing, and changing the library folder. Screenshots go to --out.
+tags, collections, search, removing, and changing the library folder. Screenshots go to --out.
 """
 import argparse
 import json
@@ -311,6 +311,73 @@ try:
         page.screenshot(path=str(a.out / "08-tag.png"))
         page.click(".filters >> text=tools")
 
+        # ---- collections ---------------------------------------------------------------
+        colls = lambda: json.loads((lib / "_library/collections.json").read_text())["collections"]
+        cards = lambda: sorted(page.eval_on_selector_all(".card:not(.pending)", "els => els.map((e) => e.dataset.id)"))
+        page.goto(BASE + "/#/repo/gitlab.com/demo/lab")
+        page.wait_for_selector("#repo-new-collection")
+        page.click("#repo-new-collection")
+        page.fill("#prompt-input", "  Game   tools ")
+        page.click("#prompt-ok")
+        wait_for(lambda: [(c["name"], c["repos"]) for c in colls()] == [("Game tools", ["gitlab.com/demo/lab"])], "a collection is made from a project's page, with the project in it")
+        wait_for(lambda: page.is_checked("#repo-collections input[type=checkbox]"), "the project's page shows it's in the collection")
+        page.click("#new-collection")
+        page.fill("#prompt-input", "game TOOLS")
+        page.click("#prompt-ok")
+        page.wait_for_selector(".dialog .notice.error")
+        check("already" in page.inner_text(".dialog .notice.error"), "two collections can't share a name")
+        page.fill("#prompt-input", "To try")
+        page.click("#prompt-ok")
+        page.wait_for_selector("#collection-empty")
+        check(page.inner_text("#filter-chip").strip() == "To try", "a new collection from the menu opens, empty")
+        page.click("#collection-empty button")
+        page.wait_for_selector("#choose-list")
+        page.fill("#choose-find", "tool")
+        check(page.locator("#choose-list input").count() == 1, "the project list can be narrowed")
+        page.check("#choose-list input[data-id='github.com/demo/tool']")
+        page.screenshot(path=str(a.out / "08c-choose.png"))
+        page.click("#choose-ok")
+        wait_for(lambda: cards() == ["github.com/demo/tool"], "projects ticked in the list are put in the collection")
+        to_try = next(c for c in colls() if c["name"] == "To try")
+        page.click("#collection-menu")
+        page.click("#collection-rename")
+        page.fill("#prompt-input", "Later")
+        page.click("#prompt-ok")
+        wait_for(lambda: [c["name"] for c in colls()] == ["Game tools", "Later"] and page.inner_text("#filter-chip").strip() == "Later", "a collection can be renamed")
+        check(next(c for c in colls() if c["name"] == "Later")["id"] == to_try["id"], "renaming keeps the collection's projects")
+        game = next(c for c in colls() if c["name"] == "Game tools")
+        page.click(f"#collection-{game['id']}")
+        wait_for(lambda: cards() == ["gitlab.com/demo/lab"], "a collection in the menu narrows the library")
+        page.select_option("select[aria-label='Sort by']", "name")
+        check(cards() == ["gitlab.com/demo/lab"], "sorting keeps the collection's filter")
+        page.fill("#search", "zebrafish")
+        wait_for(lambda: page.locator(".card").count() == 0 and "Nothing matches" in page.inner_text(".page"), "search works within a collection")
+        page.click(f"#collection-{to_try['id']}")
+        wait_for(lambda: cards() == ["github.com/demo/tool"], "search and another collection together")
+        page.fill("#search", "")
+        page.click("#filter-chip")
+        page.fill("#search", "later")
+        wait_for(lambda: cards() == ["github.com/demo/tool"], "searching finds projects by their collection's name")
+        page.fill("#search", "")
+        wait_for(lambda: page.locator(".card").count() == 2, "clearing the search shows everything again")
+        page.goto(BASE + "/#/repo/github.com/demo/tool")
+        page.wait_for_selector(f"#repo-collections input[data-collection='{game['id']}']")
+        page.check(f"#repo-collections input[data-collection='{game['id']}']")
+        wait_for(lambda: sorted(next(c for c in colls() if c["name"] == "Game tools")["repos"]) == ["github.com/demo/tool", "gitlab.com/demo/lab"], "a project can be put in a collection from its page")
+        page.uncheck(f"#repo-collections input[data-collection='{to_try['id']}']")
+        wait_for(lambda: next(c for c in colls() if c["name"] == "Later")["repos"] == [], "and taken out")
+        page.locator(".inspector").screenshot(path=str(a.out / "08d-repo-collections.png"))
+        page.goto(BASE + "/#/")
+        page.click(f"#collection-{game['id']}")
+        wait_for(lambda: page.locator(".card").count() == 2, "the collection shows both projects")
+        page.screenshot(path=str(a.out / "08e-collection.png"))
+        page.click(f"#collection-{to_try['id']}")
+        page.click("#collection-menu")
+        page.click("#collection-delete")
+        page.click("#confirm-ok")
+        wait_for(lambda: [c["name"] for c in colls()] == ["Game tools"] and page.locator("#filter-chip").count() == 0, "a collection can be deleted, and the library shows everything")
+        check(page.locator(".card").count() == 2 and (lib / "github.com/demo/tool/repo.json").is_file(), "deleting a collection keeps its projects")
+
         # ---- deleting a version, removing a project -----------------------------------
         page.goto(BASE + "/#/repo/github.com/demo/tool?tab=versions")
         page.wait_for_selector("#versions tbody tr >> nth=2")
@@ -326,6 +393,7 @@ try:
         wait_for(lambda: not (lib / "gitlab.com").exists(), "removing a project deletes its folder")
         page.wait_for_selector(".card")
         check(page.locator(".card").count() == 1, "the removed project leaves the library")
+        check(colls()[0]["repos"] == ["github.com/demo/tool"], "a removed project leaves its collections")
 
         # ---- another library folder, and back --------------------------------------------
         other = home / "Other library"

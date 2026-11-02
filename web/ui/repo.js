@@ -6,29 +6,14 @@ import { useStore } from "../lib/store.js";
 import { ui, api, toast, errText, loadRepos, fileChoices, filesHint, KEEP, keepLabel } from "./state.js";
 import { Icon } from "./icons.js";
 import { confirmDialog } from "./dialogs.js";
+import { newCollection, setInCollection } from "./collections.js";
+import { Menu } from "./menu.js";
 import { launch, check, openFolder, openUrl } from "./actions.js";
 import { bytes, ago, when, day, plural, short } from "../lib/format.js";
 
 const KIND = { github: "GitHub", gitlab: "GitLab", gitea: "Gitea / Forgejo" };
 
 /** A small menu under a button; closes on a click outside or Escape. */
-function Menu({ label, title, cls = "", children, align = "left", id }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef(null);
-  useEffect(() => {
-    if (!open) return;
-    const off = (e) => { if (!ref.current?.contains(e.target)) setOpen(false); };
-    const esc = (e) => e.key === "Escape" && setOpen(false);
-    document.addEventListener("mousedown", off);
-    document.addEventListener("keydown", esc);
-    return () => { document.removeEventListener("mousedown", off); document.removeEventListener("keydown", esc); };
-  }, [open]);
-  return html`<span class="anchor" ref=${ref}>
-    <button type="button" id=${id} class=${cls} title=${title} aria-haspopup="menu" aria-expanded=${open ? "true" : "false"} onClick=${() => setOpen(!open)}>${label}</button>
-    ${open && html`<div class="menu" role="menu" style=${`top:calc(100% + 4px);${align === "right" ? "right:0" : "left:0"}`} onClick=${(e) => e.target.closest("button") && setOpen(false)}>${children}</div>`}
-  </span>`;
-}
-
 function LaunchControl({ repo, onChange }) {
   const [list, setList] = useState(null);
   const s = repo.summary;
@@ -278,6 +263,17 @@ function Tags({ repo, saveTags }) {
   </div>`;
 }
 
+function Collections({ id }) {
+  const collections = useStore(ui, (s) => s.collections);
+  return html`<div id="repo-collections">
+    ${collections.length > 0 && html`<ul class="choose">${collections.map((c) => html`<li key=${c.id}><label class="check">
+      <input type="checkbox" data-collection=${c.id} checked=${c.repos.includes(id)} onChange=${(e) => setInCollection(c, id, e.target.checked)} />
+      <span>${c.name}</span><span class="muted mono">${c.repos.length}</span></label></li>`)}</ul>`}
+    <p class="hint">${collections.length ? "Tick the collections this project belongs to. They're listed in the menu." : "Group projects under names of your own, like Game tools or To try. Collections are listed in the menu."}</p>
+    <button type="button" class="small" id="repo-new-collection" onClick=${() => newCollection([id])}>${Icon.plus(13)} New collection with this project…</button>
+  </div>`;
+}
+
 function Inspector({ repo, reload }) {
   const s = repo.summary;
   const d = repo.details;
@@ -318,6 +314,7 @@ function Inspector({ repo, reload }) {
       </dl>
     </section>
     ${d.topics.length > 0 && html`<section><h2>Topics</h2><ul class="chips">${d.topics.map((t) => html`<li class="chip" key=${t}>${t}</li>`)}</ul></section>`}
+    <section><h2>Collections</h2><${Collections} id=${id} /></section>
     <section><h2>Your tags</h2><${Tags} repo=${repo} saveTags=${saveTags} /></section>
     <section><h2>Follow</h2><${Following} repo=${repo} save=${save} /></section>
   </aside>`;

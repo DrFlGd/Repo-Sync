@@ -141,6 +141,8 @@ button.chip:hover { border-color: var(--tool); color: var(--tool); }
 .nav-count:not(:empty)::after { content: "]"; }
 .nav-foot { margin-top: auto; }
 .filters .nav + .nav-head { margin-top: 12px; }
+.nav-link.quiet { color: var(--graphite); font-weight: 500; font-size: 13px; }
+.nav-link.quiet:hover { color: var(--tool); }
 
 .cmdbar { display: flex; align-items: center; gap: 12px; min-height: 58px; padding: 10px 22px; background: var(--white); border-bottom: 1px solid var(--ink); flex: none; flex-wrap: wrap; }
 .cmdbar h1 { font-size: 20px; white-space: nowrap; }
@@ -269,6 +271,15 @@ dl.props dd a { color: var(--tool); }
 .backdrop { position: fixed; inset: 0; background: rgba(10, 16, 20, .45); z-index: 40; display: grid; place-items: start center; padding: 10vh 16px 16px; overflow: auto; }
 .dialog { width: min(620px, 100%); background: var(--white); border: 1px solid var(--ink); box-shadow: var(--shadow); display: grid; gap: 14px; padding: 20px 22px; }
 .dialog h2 { font-size: 19px; }
+.dialog.narrow { width: min(440px, 100%); }
+.dialog .search.wide { flex: none; width: 100%; }
+.choose { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.dialog .choose { max-height: min(360px, 50vh); overflow: auto; border: 1px solid var(--rule); padding: 6px 8px; }
+.choose label.check { padding: 3px 0; min-width: 0; }
+.choose .name { font-weight: 600; }
+.choose .muted { margin-left: auto; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#repo-collections { display: grid; gap: 8px; justify-items: start; }
+#repo-collections .choose { justify-self: stretch; }
 .dialog .buttons { display: flex; gap: 8px; justify-content: flex-end; }
 .checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 13.5px; max-height: 180px; overflow: auto; }
 .checks li { display: flex; gap: 8px; align-items: baseline; }
