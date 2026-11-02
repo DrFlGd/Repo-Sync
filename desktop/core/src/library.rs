@@ -217,6 +217,34 @@ pub struct FollowedAccount {
     pub removed: Vec<String>,
 }
 
+/// A collection: projects the user grouped under a name of their own
+/// (_library/collections.json). A project can be in any number of them.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Collection {
+    /// Stays the same when the collection is renamed.
+    pub id: String,
+    pub name: String,
+    /// Project ids ("github.com/owner/name"), in the order they were put in.
+    #[serde(default)]
+    pub repos: Vec<String>,
+    #[serde(default)]
+    pub created: String,
+    /// Keys written by a newer app, kept.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// Changes to the collections, applied by `Library::edit_collections`.
+pub enum CollectionEdit {
+    Create { name: String, repos: Vec<String> },
+    Rename { id: String, name: String },
+    Delete { id: String },
+    Add { id: String, repos: Vec<String> },
+    Remove { id: String, repos: Vec<String> },
+    /// A project left the library: it leaves every collection.
+    Forget { repo: String },
+}
+
 pub struct Library {
     pub root: PathBuf,
     pub id: String,
@@ -310,6 +338,99 @@ impl Library {
         write_json(&self.accounts_file(), &json!({ "accounts": list }))
     }
 
+    fn collections_file(&self) -> PathBuf {
+        self.root.join(META_DIR).join("collections.json")
+    }
+
+    /// The user's collections, in the order they were made.
+    pub fn collections(&self) -> Vec<Collection> {
+        std::fs::read(self.collections_file()).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()).and_then(|v| serde_json::from_value(v["collections"].clone()).ok()).unwrap_or_default()
+    }
+
+    pub fn save_collections(&self, list: &[Collection]) -> Result<()> {
+        write_json(&self.collections_file(), &json!({ "collections": list }))
+    }
+
+    /// Change the collections and save them. Returns the collection changed
+    /// (none for Delete and Forget).
+    pub fn edit_collections(&self, edit: CollectionEdit) -> Result<Option<Collection>> {
+        let mut all = self.collections();
+        let clean = |name: &str| -> Result<String> {
+            let n = name.split_whitespace().collect::<Vec<_>>().join(" ");
+            if n.is_empty() {
+                bail!("Give the collection a name.");
+            }
+            if n.chars().count() > 80 {
+                bail!("That name is too long (80 letters at most).");
+            }
+            Ok(n)
+        };
+        let taken = |all: &[Collection], name: &str, except: &str| all.iter().any(|c| c.id != except && c.name.to_lowercase() == name.to_lowercase());
+        let find = |all: &mut Vec<Collection>, id: &str| -> Result<usize> { all.iter().position(|c| c.id == id).context("That collection isn't there any more.") };
+        let known = |repos: Vec<String>| -> Vec<String> {
+            let mut out: Vec<String> = vec![];
+            for r in repos {
+                if self.repos.contains_key(&r) && !out.contains(&r) {
+                    out.push(r);
+                }
+            }
+            out
+        };
+        let changed = match edit {
+            CollectionEdit::Create { name, repos } => {
+                let name = clean(&name)?;
+                if taken(&all, &name, "") {
+                    bail!("There's a collection called {name} already.");
+                }
+                let mut id = format!("c-{}", &new_id()[..8]);
+                while all.iter().any(|c| c.id == id) {
+                    id = format!("c-{}", &new_id()[..8]);
+                }
+                all.push(Collection { id, name, repos: known(repos), created: now_iso(), extra: Map::new() });
+                all.last().cloned()
+            }
+            CollectionEdit::Rename { id, name } => {
+                let name = clean(&name)?;
+                if taken(&all, &name, &id) {
+                    bail!("There's a collection called {name} already.");
+                }
+                let i = find(&mut all, &id)?;
+                all[i].name = name;
+                Some(all[i].clone())
+            }
+            CollectionEdit::Delete { id } => {
+                let i = find(&mut all, &id)?;
+                all.remove(i);
+                None
+            }
+            CollectionEdit::Add { id, repos } => {
+                let i = find(&mut all, &id)?;
+                for r in known(repos) {
+                    if !all[i].repos.contains(&r) {
+                        all[i].repos.push(r);
+                    }
+                }
+                Some(all[i].clone())
+            }
+            CollectionEdit::Remove { id, repos } => {
+                let i = find(&mut all, &id)?;
+                all[i].repos.retain(|r| !repos.contains(r));
+                Some(all[i].clone())
+            }
+            CollectionEdit::Forget { repo } => {
+                if !all.iter().any(|c| c.repos.contains(&repo)) {
+                    return Ok(None);
+                }
+                for c in all.iter_mut() {
+                    c.repos.retain(|r| *r != repo);
+                }
+                None
+            }
+        };
+        self.save_collections(&all)?;
+        Ok(changed)
+    }
+
     pub fn save_repo(&self, r: &Repo) -> Result<()> {
         let v = serde_json::to_value(r)?;
         write_json(&self.folder_of(&r.id()).join(REPO_FILE), &v)
@@ -366,6 +487,39 @@ mod tests {
         assert_eq!(lib.repos["gitlab.com/g/sub/p"].extra["mine"], json!(42));
         assert_eq!(lib.unreadable.len(), 1);
         assert!(lib.inside("../etc").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn collections_are_made_renamed_filled_and_deleted() {
+        let dir = std::env::temp_dir().join(format!("reposync-coll-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let lib = Library::open(&dir).unwrap();
+        for p in ["a/one", "a/two"] {
+            lib.save_repo(&Repo::new(SourceRef { kind: Kind::GitHub, host: "github.com".into(), path: p.into() }, Follow::default())).unwrap();
+        }
+        let lib = Library::open(&dir).unwrap();
+        let (one, two) = ("github.com/a/one".to_string(), "github.com/a/two".to_string());
+        let c = lib.edit_collections(CollectionEdit::Create { name: "  Game   tools ".into(), repos: vec![one.clone(), "github.com/x/missing".into(), one.clone()] }).unwrap().unwrap();
+        assert_eq!(c.name, "Game tools");
+        assert_eq!(c.repos, vec![one.clone()], "unknown and repeated projects are left out");
+        assert!(lib.edit_collections(CollectionEdit::Create { name: "game TOOLS".into(), repos: vec![] }).is_err(), "names are unique, whatever the case");
+        assert!(lib.edit_collections(CollectionEdit::Create { name: "   ".into(), repos: vec![] }).is_err());
+        let other = lib.edit_collections(CollectionEdit::Create { name: "Later".into(), repos: vec![] }).unwrap().unwrap();
+        assert!(lib.edit_collections(CollectionEdit::Rename { id: other.id.clone(), name: "Game Tools".into() }).is_err());
+        let c2 = lib.edit_collections(CollectionEdit::Rename { id: c.id.clone(), name: "Games".into() }).unwrap().unwrap();
+        assert_eq!((c2.id.as_str(), c2.name.as_str()), (c.id.as_str(), "Games"));
+        let c3 = lib.edit_collections(CollectionEdit::Add { id: c.id.clone(), repos: vec![two.clone(), one.clone()] }).unwrap().unwrap();
+        assert_eq!(c3.repos, vec![one.clone(), two.clone()]);
+        let c4 = lib.edit_collections(CollectionEdit::Remove { id: c.id.clone(), repos: vec![one.clone()] }).unwrap().unwrap();
+        assert_eq!(c4.repos, vec![two.clone()]);
+        lib.edit_collections(CollectionEdit::Add { id: other.id.clone(), repos: vec![two.clone()] }).unwrap();
+        lib.edit_collections(CollectionEdit::Forget { repo: two.clone() }).unwrap();
+        assert!(lib.collections().iter().all(|c| c.repos.is_empty()), "a removed project leaves every collection");
+        lib.edit_collections(CollectionEdit::Delete { id: other.id.clone() }).unwrap();
+        let names: Vec<String> = lib.collections().into_iter().map(|c| c.name).collect();
+        assert_eq!(names, vec!["Games".to_string()]);
+        assert!(lib.edit_collections(CollectionEdit::Delete { id: other.id }).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

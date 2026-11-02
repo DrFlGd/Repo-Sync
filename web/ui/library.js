@@ -5,6 +5,8 @@ import { useStore } from "../lib/store.js";
 import { ui, setPref, loadRepos } from "./state.js";
 import { Icon } from "./icons.js";
 import { openAdd } from "./dialogs.js";
+import { Menu } from "./menu.js";
+import { chooseProjects, renameCollection, deleteCollection } from "./collections.js";
 import { launch, checkAll } from "./actions.js";
 import { bytes, ago, when, plural } from "../lib/format.js";
 
@@ -29,9 +31,10 @@ function sorter(by) {
   }
 }
 
-function matches(r, f) {
+function matches(r, f, coll) {
   if (!f) return true;
   switch (f.by) {
+    case "collection": return !!coll?.repos.includes(r.id);
     case "lang": return r.language === f.value;
     case "tag": return r.tags.includes(f.value);
     case "host": return r.host === f.value;
@@ -119,6 +122,9 @@ export function LibraryPage() {
   const view = useStore(ui, (s) => s.view);
   const sort = useStore(ui, (s) => s.sort);
   const jobs = useStore(ui, (s) => s.jobs);
+  const collections = useStore(ui, (s) => s.collections);
+  const coll = filter?.by === "collection" ? collections.find((c) => c.id === filter.value) : null;
+  const filterName = coll ? coll.name : filter?.value;
   const [query, setQuery] = useState(ui.get().query);
   // the search runs in the backend (it reads the readmes too), a moment after typing stops
   useEffect(() => {
@@ -126,15 +132,23 @@ export function LibraryPage() {
     const t = setTimeout(() => { ui.set({ query }); loadRepos(); }, 200);
     return () => clearTimeout(t);
   }, [query]);
-  const list = useMemo(() => repos.filter((r) => matches(r, filter)).sort(sorter(sort)), [repos, filter, sort]);
+  const list = useMemo(() => repos.filter((r) => matches(r, filter, coll)).sort(sorter(sort)), [repos, filter, coll, sort]);
   const have = new Set(repos.map((r) => r.id));
-  const pending = [jobs.current && { ...jobs.current.job, stage: jobs.current.stage }, ...(jobs.queued || [])]
+  // projects being added belong to no collection yet
+  const pending = coll ? [] : [jobs.current && { ...jobs.current.job, stage: jobs.current.stage }, ...(jobs.queued || [])]
     .filter((j) => j && j.type === "add" && !have.has(j.repo));
   const empty = totals.count === 0 && pending.length === 0;
   return html`<div class="cmdbar">
       <h1>Library</h1>
       <span class="count">${filter ? `${list.length} of ${totals.count}` : totals.count}</span>
-      ${filter && html`<button type="button" class="chip" onClick=${() => ui.set({ filter: null })} title="Show everything">${filter.value} ${Icon.x(11)}</button>`}
+      ${filter && html`<button type="button" class="chip" id="filter-chip" onClick=${() => ui.set({ filter: null })} title="Show everything">${filterName} ${Icon.x(11)}</button>`}
+      ${coll && html`<${Menu} id="collection-menu" label=${Icon.dots(16)} title=${`The collection ${coll.name}`}>
+        <div class="menu-head">Collection</div>
+        <button type="button" id="collection-choose" onClick=${() => chooseProjects(coll)}>Choose its projects…</button>
+        <button type="button" id="collection-rename" onClick=${() => renameCollection(coll)}>Rename…</button>
+        <div class="sep"></div>
+        <button type="button" class="danger" id="collection-delete" onClick=${() => deleteCollection(coll)}>${Icon.trash(14)} Delete the collection…</button>
+      </${Menu}>`}
       <label class="search"><span class="visually-hidden">Search</span>${Icon.search(15)}
         <input id="search" type="search" placeholder="Search names, topics, readmes…" value=${query} onInput=${(e) => setQuery(e.target.value)} /></label>
       <span class="spacer"></span>
@@ -150,7 +164,12 @@ export function LibraryPage() {
     <div class="page">
       ${totals.unreadable.length > 0 && html`<p class="notice">${plural(totals.unreadable.length, "folder")} in the library couldn't be read: ${totals.unreadable.map((u) => `${u.folder} (${u.error})`).join("; ")}</p>`}
       ${empty ? html`<${EmptyLibrary} />`
-        : list.length === 0 && pending.length === 0 ? html`<p class="muted">Nothing matches${query ? ` “${query}”` : ""}${filter ? ` in ${filter.value}` : ""}.</p>`
+        : coll && coll.repos.length === 0 ? html`<div class="empty-state" id="collection-empty">
+            <h2>${coll.name} is empty</h2>
+            <p class="muted">Tick the projects to keep together here. They stay in the library as they are; a project can be in any number of collections.</p>
+            <div><button type="button" class="primary" onClick=${() => chooseProjects(coll)}>${Icon.plus(15)} Choose projects…</button></div>
+          </div>`
+        : list.length === 0 && pending.length === 0 ? html`<p class="muted">Nothing matches${query ? ` “${query}”` : ""}${filter ? ` in ${filterName}` : ""}.</p>`
         : view === "list" ? html`<${Rows} list=${list} sort=${sort} />`
         : html`<div class="cards">${pending.map((j) => html`<${PendingCard} key=${"p" + j.id} job=${j} />`)}${list.map((r) => html`<${Card} key=${r.id} r=${r} />`)}</div>`}
     </div>`;

@@ -7,9 +7,10 @@ export const ui = createStore({
   route: { page: "library" },
   info: {},
   repos: [],           // summaries (api "repos")
+  collections: [],     // { id, name, repos: [ids] }, in the order made (api "repos")
   totals: { count: 0, bytes: 0, unreadable: [], next_check: null },
   query: "",
-  filter: null,        // { by: "lang" | "tag" | "topic" | "host" | "status", value }
+  filter: null,        // { by: "lang" | "tag" | "topic" | "host" | "status" | "collection", value }
   jobs: { current: null, queued: [], recent: [] },
   dialog: null,        // { type: "add", text } | { type: "confirm", ... }
   view: "cards",
@@ -62,9 +63,13 @@ export async function loadRepos() {
   try {
     const r = await api("repos", { query: ui.get().query });
     if (seq !== reposSeq) return;
-    ui.set({ repos: r.repos, totals: { count: r.count, bytes: r.bytes, unreadable: r.unreadable || [], next_check: r.next_check } });
+    const collections = r.collections || [];
+    const f = ui.get().filter;
+    // a collection deleted elsewhere stops filtering the library
+    if (f?.by === "collection" && !collections.some((c) => c.id === f.value)) ui.set({ filter: null });
+    ui.set({ repos: r.repos, collections, totals: { count: r.count, bytes: r.bytes, unreadable: r.unreadable || [], next_check: r.next_check } });
   } catch (e) {
-    ui.set({ repos: [], totals: { count: 0, bytes: 0, unreadable: [], next_check: null } });
+    ui.set({ repos: [], collections: [], totals: { count: 0, bytes: 0, unreadable: [], next_check: null } });
   }
 }
 

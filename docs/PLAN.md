@@ -19,6 +19,8 @@ Jerred: "review Model Library, SCAD Workshop and Game Library for design cues an
 
 ```
 <library>/_library/library.json    { format: 1, id, name, created, settings }
+<library>/_library/accounts.json   followed accounts
+<library>/_library/collections.json  the user's collections: { collections: [{ id, name, repos, created }] }
 <library>/<host>/<path>/repo.json  the project (below)
 <library>/<host>/<path>/source/<YYYY-MM-DD_HHMM>_<sha7>/   one captured commit, unpacked
 <library>/<host>/<path>/releases/<tag>/                      one captured release: files + RELEASE_NOTES.md
@@ -61,3 +63,13 @@ Jerred tried 0.1.0 on terrain-press and asked for: a releases view with a box pe
 - **Accounts.** A link with only an owner (`github.com/someone`, `github.com/orgs/x`, `gitlab.com/groups/x`, `codeberg.org/someone`) is an account. Adding one queues an `account` job: it lists the projects, queues an Add for each one not in the library (forks only when asked) and, unless unticked, follows the account in `_library/accounts.json` (in the library, so it travels with it). The schedule looks at followed accounts at the library's interval; Check all looks too. A project of a followed account removed by hand is remembered in `removed` and not added back.
 - **Limits to keep** (asked the same day): "keep the newest N" for code versions and for releases, separately, in the library's settings and per project (Follow). 0 / "Every one" stays the default, so nothing is deleted unless asked. They're applied after each check, so a capture never deletes what it's replacing before the new one is in; releases ticked by hand (`picked`) are outside the count.
 - **Wording.** Tags are "Your tags" with a line saying they aren't git tags; "Only files for <system>" with a line saying what's skipped.
+
+## 10. Collections (2026-11-02)
+
+Jerred asked to group projects into custom collections of his own naming. Decisions:
+
+- **Collections beside tags, not instead.** Tags stay per-project labels in `repo.json`. A collection is a named list kept in one place, `_library/collections.json` (in the library, so it travels with it, like accounts): it can exist while empty, be renamed or deleted in one step without touching any `repo.json`, and keeps projects in the order they were put in. A project can be in any number of collections.
+- **Ids, not names.** Each collection has a fixed id (`c-<8 hex>`), so renaming keeps everything; names are unique ignoring case, spaces collapsed, at most 80 letters.
+- **Commands.** `collections`; `collection_create {name, ids}`, `collection_rename {collection, name}`, `collection_delete {collection}`, `collection_add` / `collection_remove {collection, ids}`. Unknown or repeated project ids are dropped. Removing a project from the library takes it out of every collection; a project folder deleted by hand is left out of the lists `repos` returns (the file keeps it until the next edit).
+- **Interface.** The menu lists the collections (above the tags, and also while searching) with New collection. Picking one filters the library like a tag, together with search and sort; its ⋯ menu has Choose its projects (a list of the library to tick), Rename and Delete (the projects stay). A project's page has a Collections section with a box per collection and "New collection with this project". Search also matches a collection's name.
+

@@ -7,7 +7,7 @@ use crate::capture::{self, Limits, Outcome};
 use crate::config::{AppConfig, Prefs};
 use crate::http::{Client, Progress};
 use crate::launch;
-use crate::library::{Follow, FollowedAccount, Library, Repo, Settings};
+use crate::library::{CollectionEdit, Follow, FollowedAccount, Library, Repo, Settings};
 use crate::readme;
 use crate::sources::{self, Account, Kind};
 use crate::util::{now_iso, now_unix, percent_encode, unix_from_iso};
@@ -242,6 +242,20 @@ impl App {
                     Ok(json!(true))
                 })
             }
+            "collections" => self.with_lib(|l| Ok(json!(l.collections()))),
+            "collection_create" | "collection_rename" | "collection_delete" | "collection_add" | "collection_remove" => {
+                let coll = || a["collection"].as_str().map(String::from).context("no collection given");
+                let name = || a["name"].as_str().unwrap_or("").to_string();
+                let ids = || a["ids"].as_array().map(|v| v.iter().filter_map(|x| x.as_str().map(String::from)).collect::<Vec<_>>()).unwrap_or_default();
+                let edit = match cmd {
+                    "collection_create" => CollectionEdit::Create { name: name(), repos: ids() },
+                    "collection_rename" => CollectionEdit::Rename { id: coll()?, name: name() },
+                    "collection_delete" => CollectionEdit::Delete { id: coll()? },
+                    "collection_add" => CollectionEdit::Add { id: coll()?, repos: ids() },
+                    _ => CollectionEdit::Remove { id: coll()?, repos: ids() },
+                };
+                self.with_lib(|l| Ok(json!(l.edit_collections(edit)?)))
+            }
             "release_get" => {
                 let id = id()?;
                 let tag = a["tag"].as_str().filter(|t| !t.is_empty()).context("no release given")?.to_string();
@@ -398,11 +412,18 @@ impl App {
     fn repos(&self, query: &str) -> Result<Value> {
         let words: Vec<String> = query.to_lowercase().split_whitespace().map(String::from).collect();
         self.with_lib(|l| {
+            // collections hold only projects still in the library (a folder may have been deleted by hand)
+            let mut collections = l.collections();
+            for c in collections.iter_mut() {
+                c.repos.retain(|id| l.repos.contains_key(id));
+            }
             let mut out = vec![];
             for r in l.repos.values() {
                 let mut v = self.summary(l, r);
                 if !words.is_empty() {
-                    let meta = format!("{} {} {} {} {} {}", r.id(), r.details.description, r.details.language, r.details.topics.join(" "), r.tags.join(" "), r.notes).to_lowercase();
+                    let id = r.id();
+                    let in_collections: Vec<&str> = collections.iter().filter(|c| c.repos.contains(&id)).map(|c| c.name.as_str()).collect();
+                    let meta = format!("{} {} {} {} {} {} {}", id, r.details.description, r.details.language, r.details.topics.join(" "), r.tags.join(" "), r.notes, in_collections.join(" ")).to_lowercase();
                     if !words.iter().all(|w| meta.contains(w.as_str())) {
                         let text = self.readme_text(l, r);
                         if !words.iter().all(|w| meta.contains(w.as_str()) || text.contains(w.as_str())) {
@@ -416,6 +437,7 @@ impl App {
             let total: u64 = l.repos.values().map(Repo::bytes).sum();
             Ok(json!({
                 "repos": out,
+                "collections": collections,
                 "count": l.repos.len(),
                 "bytes": total,
                 "unreadable": l.unreadable.iter().map(|(f, e)| json!({ "folder": f, "error": e })).collect::<Vec<_>>(),
@@ -571,6 +593,7 @@ impl App {
             if changed {
                 l.save_accounts(&accounts)?;
             }
+            l.edit_collections(CollectionEdit::Forget { repo: id.to_string() })?;
             let dir = l.folder_of(id);
             std::fs::remove_dir_all(&dir).with_context(|| format!("couldn't remove {}", dir.display()))?;
             // tidy the owner's and host's folders when they're empty now
