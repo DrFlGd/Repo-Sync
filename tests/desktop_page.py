@@ -498,7 +498,8 @@ try:
         page.goto(BASE + "/#/")
         card = page.locator(".card[data-id='github.com/demo/vectorclad']")
         card.wait_for()
-        check(card.locator(".site-badge").count() == 1, "the card says the project has a website")
+        # the page polls the jobs every second, so the card can still say "Downloading…" for a moment
+        wait_for(lambda: card.locator(".site-badge").count() == 1, "the card says the project has a website", 10)
         page.goto(BASE + "/#/repo/github.com/demo/vectorclad?tab=site")
         page.wait_for_selector("#site-versions")
         check("Static website" in page.inner_text(".site-head") and "pages.yml" in page.inner_text(".site-head"), "the Website tab says what was found and why")
