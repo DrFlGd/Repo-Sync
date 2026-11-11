@@ -84,6 +84,7 @@ impl Source for GitLab {
             archived: v["archived"].as_bool().unwrap_or(false),
             pushed_at: s(&v["last_activity_at"]),
             created_at: s(&v["created_at"]),
+            ..Default::default()
         })
     }
 

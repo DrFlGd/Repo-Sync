@@ -14,6 +14,8 @@ Newest published first. A test makes a new commit or a new release folder to
 simulate a change upstream. The same projects answer as GitHub (/repos/...)
 and as GitLab (/api/v4/projects/<owner>%2F<name>/...). /users/<owner>/repos lists
 an owner's projects as GitHub does (a name ending in "-fork" is a fork).
+A project with a gh-pages branch, or a workflow that deploys to Pages, says
+has_pages and answers /repos/<owner>/<name>/pages as GitHub does.
 """
 import argparse
 import json
@@ -70,6 +72,19 @@ def releases(owner, name):
 
 def branches(repo):
     return [{"name": b} for b in git(repo, "branch", "--format=%(refname:short)").split()]
+
+
+def pages_of(repo, owner, name):
+    """GitHub's /pages for a project: from its gh-pages branch or its workflow, or None."""
+    if any(b["name"] == "gh-pages" for b in branches(repo)):
+        return {"build_type": "legacy", "source": {"branch": "gh-pages", "path": "/"}, "cname": None, "html_url": f"https://{owner.lower()}.github.io/{name}/"}
+    try:
+        wf = git(repo, "grep", "-l", "deploy-pages", "HEAD", "--", ".github/workflows")
+    except subprocess.CalledProcessError:
+        wf = ""
+    if wf.strip():
+        return {"build_type": "workflow", "source": {"branch": "main", "path": "/"}, "cname": None, "html_url": f"https://{owner.lower()}.github.io/{name}/"}
+    return None
 
 
 def commit_json(repo, ref):
@@ -130,7 +145,11 @@ class H(BaseHTTPRequestHandler):
                 "stargazers_count": 42, "forks_count": 3, "language": "Rust", "topics": ["testing", "demo"],
                 "license": {"spdx_id": "MIT", "name": "MIT License"}, "archived": False,
                 "pushed_at": iso(int(git(repo, "log", "-1", "--format=%ct").strip())), "created_at": "2024-01-01T00:00:00Z",
+                "has_pages": pages_of(repo, owner, name) is not None,
             })
+        if rest == ["pages"]:
+            pg = pages_of(repo, owner, name)
+            return self.send(200, pg) if pg else self.send(404, {"message": "Not Found"})
         if rest[0] == "commits" and len(rest) >= 2:
             ref = "/".join(rest[1:])
             try:

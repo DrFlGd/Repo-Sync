@@ -68,6 +68,7 @@ impl Source for Gitea {
             archived: v["archived"].as_bool().unwrap_or(false),
             pushed_at: s(&v["updated_at"]),
             created_at: s(&v["created_at"]),
+            ..Default::default()
         })
     }
 

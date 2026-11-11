@@ -5,6 +5,11 @@
 //!   reposync-cli add <link>... [--library <dir>]     (add projects and capture them)
 //!   reposync-cli check-all [--library <dir>]         (check every project now; for a
 //!                                                     scheduled task when the app is closed)
+//!   reposync-cli mirror <address>... [--library <dir>] (save websites as projects)
+//!   reposync-cli host [--port <n>] [--library <dir>]  (host the library's sites until stopped)
+//!   reposync-cli site <project> [--library <dir>]     (what a project holds as a website)
+//!   reposync-cli export <project> <dest> [--format folder|zip|git] [--version <list>/<folder>]
+//!                     [--push <https address>] [--library <dir>]   (package a site as a repo)
 //!   reposync-cli serve --ui <dir> --home <dir> [--library <dir>] [--port 8790] [--tick <seconds>]
 //!
 //! `serve` runs the app's commands behind a local web server, so the page can be
@@ -54,7 +59,7 @@ fn run() -> Result<()> {
             Ok(())
         }
         "serve" => serve(a),
-        "list" | "add" | "check-all" => {
+        "list" | "add" | "check-all" | "mirror" | "host" | "site" | "export" => {
             let app = local_app(&mut a)?;
             match cmd.as_str() {
                 "list" => {
@@ -71,16 +76,54 @@ fn run() -> Result<()> {
                     }
                     Ok(())
                 }
-                "add" => {
+                "add" | "mirror" => {
                     if a.rest.is_empty() {
                         bail!("give one or more links");
                     }
-                    let v = app.call("add", json!({ "inputs": a.rest })).map_err(anyhow::Error::msg)?;
+                    let v = app.call("add", json!({ "inputs": a.rest, "website": cmd == "mirror" })).map_err(anyhow::Error::msg)?;
                     for r in v.as_array().into_iter().flatten() {
                         if let Some(e) = r["error"].as_str() {
                             eprintln!("{}: {e}", r["input"].as_str().unwrap_or(""));
                         }
                     }
+                    wait(&app)
+                }
+                "site" => {
+                    let id = a.rest.first().context("give a project, such as github.com/owner/name")?;
+                    let v = app.call("site_info", json!({ "id": id })).map_err(anyhow::Error::msg)?;
+                    println!("{}", serde_json::to_string_pretty(&v)?);
+                    Ok(())
+                }
+                "host" => {
+                    let v = app.call("sites", json!({})).map_err(anyhow::Error::msg)?;
+                    println!("Hosting on {}", v["index"].as_str().unwrap_or(""));
+                    for s in v["sites"].as_array().into_iter().flatten() {
+                        println!("  {}  {}", s["url"].as_str().unwrap_or(""), s["title"].as_str().unwrap_or(""));
+                    }
+                    println!("Stop with Ctrl+C.");
+                    loop {
+                        std::thread::sleep(Duration::from_secs(3600));
+                    }
+                }
+                "export" => {
+                    let format = a.flag("--format").unwrap_or_else(|| "folder".into());
+                    let version = a.flag("--version");
+                    let push = a.flag("--push").unwrap_or_default();
+                    let (Some(id), Some(dest)) = (a.rest.first().cloned(), a.rest.get(1).cloned()) else { bail!("give a project and where to save the export") };
+                    let (coll, folder) = match version.as_deref().and_then(|v| v.split_once('/')) {
+                        Some((c, f)) => (c.to_string(), f.to_string()),
+                        None => {
+                            let info = app.call("site_info", json!({ "id": id })).map_err(anyhow::Error::msg)?;
+                            let m = &info["main"];
+                            if m.is_null() {
+                                bail!("{id} has no version that can be shown as a website");
+                            }
+                            (m["coll"].as_str().unwrap_or("").to_string(), m["folder"].as_str().unwrap_or("").to_string())
+                        }
+                    };
+                    let dest = std::path::absolute(&dest)?;
+                    let options = json!({ "format": format, "dest": dest, "pages_workflow": a.rest.iter().any(|x| x == "--pages-workflow") });
+                    app.call("site_export", json!({ "id": id, "coll": coll, "folder": folder, "options": options, "push": push })).map_err(anyhow::Error::msg)?;
                     wait(&app)
                 }
                 _ => {
@@ -89,17 +132,24 @@ fn run() -> Result<()> {
                 }
             }
         }
-        _ => bail!("usage: reposync-cli --version | list | add <link>... | check-all | serve --ui <dir> --home <dir>  [--library <dir>]"),
+        _ => bail!("usage: reposync-cli --version | list | add <link>... | check-all | mirror <address>... | host [--port <n>] | site <project> | export <project> <dest> | serve --ui <dir> --home <dir>  [--library <dir>]"),
     }
 }
 
 /// The app with this computer's config, or another library with --library.
 fn local_app(a: &mut Args) -> Result<Arc<App>> {
     let config_dir = std::env::var_os("REPOSYNC_CONFIG").map(PathBuf::from).unwrap_or_else(default_config_dir);
-    if let Some(lib) = a.flag("--library") {
+    let lib = a.flag("--library");
+    let port: Option<u16> = a.flag("--port").map(|p| p.parse()).transpose()?;
+    if lib.is_some() || port.is_some() {
         let file = config_dir.join("config.json");
         let mut cfg = AppConfig::load(&file);
-        cfg.set_library(Path::new(&lib));
+        if let Some(lib) = lib {
+            cfg.set_library(Path::new(&lib));
+        }
+        if port.is_some() {
+            cfg.site_port = port;
+        }
         cfg.save(&file)?;
     }
     App::new(AppPaths { config_dir, library_url: "library://localhost/".into() }, Duration::from_secs(3600 * 24 * 365))
@@ -195,20 +245,7 @@ fn respond(stream: &mut std::net::TcpStream, code: u16, ctype: &str, body: &[u8]
 }
 
 fn content_type(path: &str) -> &'static str {
-    match path.rsplit('.').next().unwrap_or("").to_ascii_lowercase().as_str() {
-        "html" => "text/html; charset=utf-8",
-        "js" | "mjs" => "text/javascript; charset=utf-8",
-        "css" => "text/css; charset=utf-8",
-        "json" => "application/json",
-        "svg" => "image/svg+xml",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "md" | "txt" => "text/plain; charset=utf-8",
-        "ttf" => "font/ttf",
-        _ => "application/octet-stream",
-    }
+    reposync_core::sites::mime::for_path(path)
 }
 
 /// The app's commands over HTTP: POST /invoke/<command> (as tests/tauri_shim.js

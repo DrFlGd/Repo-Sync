@@ -20,7 +20,8 @@ A desktop app (Windows first, Linux kept portable; Tauri 2) that keeps an offlin
 | `desktop/core/` | Rust, no GUI. `api.rs` (the command table `App::call`, the job queue and its worker thread, the schedule thread), `library.rs` (the library folder, `repo.json`'s shape, scanning), `sources/` (`mod.rs`: reading links, the `Source` trait, ids; `github.rs`, `gitlab.rs`, `gitea.rs`; `account.rs`: links to users and organisations, listing their projects), `capture.rs` (a check: details, a new snapshot of the code, a new release, each into its own folder through `.partial/`), `http.rs` (ureq: JSON, downloads with progress and Stop, no proxy for this computer or NO_PROXY), `archive.rs` (unpacking ZIP and .tar.gz safely), `readme.rs` (Markdown with ammonia; relative pictures from the captured files, relative links to the site), `launch.rs` (which files are for which system, launch candidates and their order, starting them), `config.rs` (this computer: the open library, tokens, prefs), `util.rs`. `src/bin/reposync-cli.rs`: `list`, `add`, `check-all`, `serve` (the backend over HTTP for the tests). |
 | `desktop/src-tauri/` | The Tauri app: a thin layer over `api.rs`, plus the folder dialog, the file manager, web links in the browser and the `library://` protocol (pictures in readmes). Version in `tauri.conf.json`. Icons from `icons/icon.svg` (`npx @tauri-apps/cli@2 icon icons/icon.svg -o icons`, then delete the mobile ones). |
 | `tools/` | `build_desktop.py` (web/ to `build/desktop/ui`, fonts with `--fetch-fonts`, `THIRD_PARTY.md` and `build-info.json` for About), `set_version.py`, `vendor_preact.py`. |
-| `tests/` | `desktop_page.py` (acceptance test: the page + `reposync-cli serve` + `forge_mock.py`, in Chromium), `forge_mock.py` (GitHub's and GitLab's APIs over local git repositories, releases as folders), `tauri_shim.js`. |
+| `tests/` | `desktop_page.py` (acceptance test: the page + `reposync-cli serve` + `forge_mock.py`, in Chromium; its websites section opens hosted sites with the internet blocked), `forge_mock.py` (GitHub's and GitLab's APIs over local git repositories, releases as folders, `/pages`), `cdn_mock.py` (jsDelivr, Google Fonts and a live website), `tauri_shim.js`. |
+| `desktop/core/src/sites/` | Hosting websites (docs/PLAN.md section 10): `detect.rs`, `router.rs`, `server.rs`, `vendor.rs`, `rewrite.rs`, `mirror.rs`, `build.rs`, `export.rs`, `scan.rs`, `mime.rs`; the commands are in `api_site.rs`; the page's side is `web/ui/site.js` (Website tab, Websites page). |
 | `.github/workflows/desktop.yml` | Windows app, tests and release; Linux only from Run workflow. |
 
 ### Conventions
@@ -36,7 +37,8 @@ A desktop app (Windows first, Linux kept portable; Tauri 2) that keeps an offlin
 
 - crates.io and npm were reachable on 2026-10-29 (`cargo test -p reposync-core` works; `apt-get install libwebkit2gtk-4.1-dev libgtk-3-dev` let `cargo check -p repo-sync` build the Tauri app too). api.github.com and codeload.github.com were refused by the session's proxy, gitlab.com was reachable: `reposync-cli add https://gitlab.com/gitlab-org/cli --library /tmp/lib` is a good live check.
 - **Acceptance test locally:** `python3 tools/build_desktop.py --out build/desktop`, then `python3 tests/desktop_page.py --cli desktop/target/debug/reposync-cli --ui build/desktop/ui --home /tmp/rs-home --out /tmp/rs-shots --chromium /opt/pw-browsers/chromium` (`pip install playwright`; the pre-installed Chromium works).
-- `REPOSYNC_API="github.com=http://127.0.0.1:8795;gitlab.com=http://127.0.0.1:8795/api/v4"` points the sources at `forge_mock.py`; `REPOSYNC_CONFIG` gives `reposync-cli` another config folder.
+- `REPOSYNC_API="github.com=http://127.0.0.1:8795;gitlab.com=http://127.0.0.1:8795/api/v4"` points the sources at `forge_mock.py`; `REPOSYNC_VENDOR="cdn.jsdelivr.net=http://127.0.0.1:8796/jsdelivr;…"` points CDNs at `cdn_mock.py`; `REPOSYNC_CONFIG` gives `reposync-cli` another config folder.
+- apt was refused by the session's proxy on 2026-11-11, so the Tauri crate couldn't be checked locally then; CI's Windows build checks it.
 
 ### Known limitations now
 
@@ -48,6 +50,7 @@ A desktop app (Windows first, Linux kept portable; Tauri 2) that keeps an offlin
 - A lowered limit to keep takes effect at the project's next check, not at once.
 - Downloads don't resume: a broken one is tried again whole at the next check.
 - Tokens are stored in plain text in the app's config folder (not the system's keyring).
+- Hosted sites are served while the app (or `reposync-cli host`) is open. A site's own API calls, and addresses a script builds while it runs on a CDN that wasn't seen, still need the internet. Service workers are served as they are.
 - Installers aren't code-signed, and the app doesn't update itself.
 
 ### Next (ideas, not yet chosen by the owner)
@@ -57,6 +60,19 @@ Keep running in the tray so checks happen with the window closed; full-text sear
 ---
 
 ## Unreleased
+
+**Hosting websites (0.2).** Jerred asked for built-in hosting of repos that would normally use GitHub Pages, as general as possible, with Agilancer/vectorclad as the example:
+
+- **Open a project's website from the library.** A project that publishes a site (a GitHub Pages workflow, a `gh-pages` branch, a `docs/` folder, GitLab Pages…) gets a Website tab and an **Open site** button: the site opens in your browser at its own address on this computer, such as `http://vectorclad.agilancer.localhost:<port>/vectorclad/`, served as GitHub Pages serves it (folders, `404.html`, clean addresses, `_redirects`). Each version has an address of its own too, so you can open last month's.
+- **Works offline.** After each capture, the scripts, styles and fonts the site loads from CDNs (jsDelivr, unpkg, esm.sh, cdnjs, Google Fonts…) are saved into the library, each file kept once, and the site uses the saved copies. The Website tab says what was saved, which servers it still needs the internet for, and lists its recent requests. "Block the internet" tests that it really works offline.
+- **A site's published branch is captured too** (`gh-pages`), so a site built by a workflow can be opened as it was published.
+- **Save any website as a project.** Add a web address (or tick "Save these as websites") and its pages are saved as they're served, with the files they load, checked on the schedule like code; a capture that's the same as the last isn't kept. A repo's live site can be captured too (Capture live site, or at each check). Compare a capture with the one before, page by page. Pages a capture missed are saved as you browse.
+- **Build a site on this computer** (Vite, Next, Hugo, MkDocs, Jekyll…), only after you agree to run the project's code; the build runs in a copy and the captured version isn't changed.
+- **Export a site as a repo of its own**: a folder, a ZIP or a Git folder, with its CDN files inside and its addresses pointed at them, a README saying where it came from, and optionally a GitHub Pages workflow; or push it to an empty GitHub repo you've made.
+- The **Websites** page lists every hosted site; the status bar shows the server's port. The library's search finds words on saved websites' pages.
+- `reposync-cli host` hosts the library's sites without the window; `mirror`, `site` and `export` do the rest from the command line.
+
+For agents (0.2): the design is docs/PLAN.md section 10. New `desktop/core/src/sites/` (`detect` what a version holds, `router` Pages' rules, `server` tiny_http on 127.0.0.1 and ::1 with one origin per site, `vendor` CDN files into `_library/sites/blobs` with a lock per version, `rewrite` addresses as served, `mirror` captures of websites, `build` local builds, `export`, `scan` reading HTML/JS/CSS, `mime`) and `api_site.rs` (the `site_*` commands, the `site` job, `add_website`). `repo.json` gained `pages`, `live` (versions like `snapshots`), `site` (settings), `snapshots[].site` (what was detected), `follow.site_branch`/`live`, `details.has_pages`/`pages`; website projects are `source.kind: "web"`, id `web/<domain>/<page>`. `REPOSYNC_VENDOR` points CDN hosts at `tests/cdn_mock.py`; the site server's port is `site_port` in this computer's config. The main window no longer counts `*.localhost` as its own (sites open in the browser).
 
 After testing 0.1.0 on terrain-press, Jerred asked for these:
 

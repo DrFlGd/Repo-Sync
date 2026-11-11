@@ -9,6 +9,7 @@ import { RepoPage } from "./repo.js";
 import { ActivityPage } from "./activity.js";
 import { SettingsPage } from "./settings.js";
 import { AboutPage } from "./about.js";
+import { SitesPage } from "./site.js";
 import { Dialogs, openAdd } from "./dialogs.js";
 import { bytes, ago } from "../lib/format.js";
 
@@ -48,18 +49,21 @@ function Sidebar() {
     tags: tally(repos, (r) => r.tags),
   }, [repos, query]);
   const errors = repos.filter((r) => r.status === "error").length;
+  const sites = repos.filter((r) => r.site).length;
   const nextTheme = { system: "light", light: "dark", dark: "system" }[theme] || "system";
   const themeIcon = theme === "system" ? Icon.auto(16) : theme === "light" ? Icon.sun(16) : Icon.moon(16);
   return html`<nav class="sidebar" aria-label="Menu">
     <a class="brand" href="#/"><${Mark} /><span>Repo Sync</span></a>
     <ul class="nav">
       <${NavLink} href="#/" icon=${Icon.library(16)} label="Library" count=${count || ""} active=${route.page === "library" || route.page === "repo"} />
+      <${NavLink} href="#/sites" icon=${Icon.globe(16)} label="Websites" count=${sites || ""} active=${route.page === "sites"} />
       <${NavLink} href="#/activity" icon=${Icon.activity(16)} label="Activity" count=${working || ""} active=${route.page === "activity"} />
       <${NavLink} href="#/settings" icon=${Icon.cog(16)} label="Settings" active=${route.page === "settings"} />
       <${NavLink} href="#/about" icon=${Icon.info(16)} label="About" active=${route.page === "about"} />
     </ul>
     ${groups && html`<div class="filters">
       ${errors > 0 && html`<div class="nav-head">Needs a look</div><ul class="nav"><${FilterLink} by="status" value="error" label="Check failed" count=${errors} /></ul>`}
+      ${sites > 0 && sites < repos.length && html`<div class="nav-head">Show only</div><ul class="nav"><${FilterLink} by="site" value="With a website" label="With a website" count=${sites} /></ul>`}
       ${groups.tags.length > 0 && html`<div class="nav-head">Tags</div><ul class="nav">${groups.tags.map(([v, n]) => html`<${FilterLink} key=${v} by="tag" value=${v} label=${v} count=${n} />`)}</ul>`}
       ${groups.langs.length > 1 && html`<div class="nav-head">Languages</div><ul class="nav">${groups.langs.slice(0, 12).map(([v, n]) => html`<${FilterLink} key=${v} by="lang" value=${v} label=${v} count=${n} />`)}</ul>`}
       ${groups.hosts.length > 1 && html`<div class="nav-head">Sources</div><ul class="nav">${groups.hosts.map(([v, n]) => html`<${FilterLink} key=${v} by="host" value=${v} label=${v} count=${n} />`)}</ul>`}
@@ -85,6 +89,7 @@ function Main() {
   if (route.page === "activity") return html`<${ActivityPage} />`;
   if (route.page === "settings") return html`<${SettingsPage} />`;
   if (route.page === "about") return html`<${AboutPage} />`;
+  if (route.page === "sites") return html`<${SitesPage} />`;
   return html`<${LibraryPage} />`;
 }
 
@@ -100,6 +105,7 @@ function StatusBar() {
     <span>${s.totals.count} ${s.totals.count === 1 ? "project" : "projects"}</span>
     <span>${bytes(s.totals.bytes || 0)}</span>
     ${s.totals.next_check && html`<span title="The next scheduled check">Next check ${ago(s.totals.next_check)}</span>`}
+    ${s.info.hosting && html`<a href="#/sites" id="hosting" title="Repo Sync's web server, for this computer only">Hosting · port ${s.info.hosting}</a>`}
     <span class="job">${cur
       ? html`<div class=${"meter" + (pct === null ? " busy" : "")}><i style=${pct === null ? "" : `width:${pct}%`}></i></div>
           <a href="#/activity">${cur.job.repo.split("/").slice(1).join("/")}: ${cur.stage}${pct !== null ? ` (${bytes(cur.done)} of ${bytes(cur.total)})` : cur.done ? ` (${bytes(cur.done)})` : ""}${queued ? ` · ${queued} waiting` : ""}</a>`

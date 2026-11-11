@@ -9,7 +9,12 @@ tests/forge_mock.py as GitHub and GitLab, runs `reposync-cli serve` with
 tests/tauri_shim.js standing in for Tauri, and drives the page: adding projects,
 the readme and details, launching the latest release, capturing changes upstream
 by hand and on the schedule (keeping every earlier version), following settings,
-tags, search, removing, and changing the library folder. Screenshots go to --out.
+tags, search, removing, and changing the library folder. Then websites: a
+project's site hosted from the library with its CDN files saved (opened with the
+internet blocked), a site published to a gh-pages branch, a website saved as a
+project and captured again, comparing captures, building, and exporting.
+tests/cdn_mock.py stands in for jsDelivr, Google Fonts and the live website.
+Screenshots go to --out.
 """
 import argparse
 import json
@@ -20,6 +25,8 @@ import struct
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 import zlib
 from pathlib import Path
@@ -109,9 +116,52 @@ lab = make_project("demo", "lab", "# Lab Project\n\nOn GitLab.\n")
 make_release("demo", "lab", "v0.9", "2026-01-02T10:00:00Z")
 git(lab, "branch", "dev")
 
+# ---- websites (used from the "websites" section on) ---------------------------
+SITE_INDEX = """<!doctype html><html><head><meta charset="utf-8"><title>VectorClad mini</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+</head><body><h1>VectorClad mini</h1><p id="status">loading</p><a href="about.html">About</a> NEWSLINK
+<script type="module" src="js/main.js"></script></body></html>
+"""
+SITE_MAIN = """import { Scene, REVISION } from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+const l = new GLTFLoader();
+document.getElementById('status').textContent = 'three r' + REVISION + (l.load().isScene ? ' ready' : '');
+fetch('data/levels.json').then((r) => r.json()).then((j) => { document.body.dataset.levels = j.levels.length; });
+document.fonts.ready.then(() => { document.body.dataset.fonts = [...document.fonts].filter((f) => f.status === 'loaded').length; });
+"""
+PAGES_YML = "name: Deploy\non: push\njobs:\n  deploy:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/upload-pages-artifact@v3\n        with:\n          path: '.'\n      - id: deployment\n        uses: actions/deploy-pages@v4\n"
+
+
+def write_files(root, files):
+    for rel, text in files.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+
+
+def site_files(title, levels, news=""):
+    return {"index.html": SITE_INDEX.replace("VectorClad mini", title).replace("NEWSLINK", news), "js/main.js": SITE_MAIN,
+            "css/style.css": "body { font-family: 'Chakra Petch', sans-serif; background: url(../img/bg.svg); }",
+            "img/bg.svg": "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'/>", "data/levels.json": json.dumps({"levels": list(range(levels))}),
+            "about.html": f"<!doctype html><title>About</title><h1>About {title}</h1>"}
+
+
+live = home / "live-site"
+write_files(live, {**site_files("Live VectorClad", 4, '<a href="news/">News</a> <a href="private/secret.html">Secret</a>'),
+                   "news/index.html": "<!doctype html><title>News</title><p>Version 2 is out</p>", "private/secret.html": "<p>secret</p>",
+                   "extra.html": "<!doctype html><title>Extra</title><p>Not linked from anywhere</p>"})
+
 mock_port, port = free_port(), free_port()
+cdn_port, site_port = free_port(), free_port()
+cdn = subprocess.Popen([sys.executable, str(ROOT / "tests/cdn_mock.py"), "--site", str(live), "--port", str(cdn_port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+(home / "app/config").mkdir(parents=True)
+(home / "app/config/config.json").write_text(json.dumps({"site_port": site_port}))
 mock = subprocess.Popen([sys.executable, str(ROOT / "tests/forge_mock.py"), "--repos", str(repos), "--port", str(mock_port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-env = {**os.environ, "REPOSYNC_API": f"github.com=http://127.0.0.1:{mock_port};gitlab.com=http://127.0.0.1:{mock_port}/api/v4"}
+env = {**os.environ, "REPOSYNC_API": f"github.com=http://127.0.0.1:{mock_port};gitlab.com=http://127.0.0.1:{mock_port}/api/v4",
+       "REPOSYNC_VENDOR": f"cdn.jsdelivr.net=http://127.0.0.1:{cdn_port}/jsdelivr;fonts.googleapis.com=http://127.0.0.1:{cdn_port}/fonts;fonts.gstatic.com=http://127.0.0.1:{cdn_port}/gstatic"}
 serve_log = open(a.out / "serve.log", "w")
 serve = subprocess.Popen([a.cli, "serve", "--ui", a.ui, "--home", str(home / "app"), "--library", str(lib), "--port", str(port), "--tick", "1"],
                          env=env, stdout=serve_log, stderr=subprocess.STDOUT)
@@ -140,6 +190,36 @@ def wait_for(fn, what, timeout=30):
 
 def repo_json(id_):
     return json.loads((lib / id_ / "repo.json").read_text(encoding="utf-8"))
+
+
+def site_get(label, path, headers=None):
+    """A request to the site server as a browser on this computer makes it: (status, body, headers)."""
+    rq = urllib.request.Request(f"http://127.0.0.1:{site_port}{path}", headers={"Host": f"{label}.localhost:{site_port}", "Accept": "text/html", **(headers or {})})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect)
+    try:
+        with opener.open(rq, timeout=15) as r:
+            return r.status, r.read().decode("utf-8", "replace"), r.headers
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", "replace"), e.headers
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kw):
+        return None
+
+
+def opened_urls():
+    return [o["args"]["url"] for o in json.loads(urllib.request.urlopen(BASE + "/test/opened").read()) if o["cmd"] == "open_url"]
+
+
+def offline_page(browser, url):
+    """Open a hosted site with every address but this computer's blocked: (page, what was blocked)."""
+    ctx = browser.new_context()
+    blocked = []
+    ctx.route("**/*", lambda route: route.continue_() if (urllib.parse.urlparse(route.request.url).hostname or "").endswith("localhost") else (blocked.append(route.request.url), route.abort()))
+    pg = ctx.new_page()
+    pg.goto(url)
+    return pg, blocked
 
 
 try:
@@ -395,6 +475,182 @@ try:
         wait_for(lambda: json.loads((lib / "_library/library.json").read_text())["settings"]["keep_releases"] == 3, "the library's limits are saved")
         page.goto(BASE + "/#/")
 
+        # ---- websites -------------------------------------------------------------------
+        vc = repos / "demo__vectorclad"
+        vc.mkdir()
+        git(vc, "init", "-q", "-b", "main")
+        write_files(vc, {**site_files("VectorClad mini", 3), ".github/workflows/pages.yml": PAGES_YML, "README.md": "# VectorClad mini\n"})
+        git(vc, "add", "-A")
+        git(vc, "commit", "-qm", "First version of the game")
+        page.keyboard.press("n")
+        page.wait_for_selector("#add-links")
+        page.fill("#add-links", "https://github.com/demo/vectorclad")
+        page.wait_for_selector(".checks li")
+        page.click("#add-go")
+        wait_for(lambda: (lib / "github.com/demo/vectorclad/repo.json").is_file(), "a project with a website is added", 40)
+        wait_for(idle, "its files from other servers are saved after the capture", 40)
+        rj = repo_json("github.com/demo/vectorclad")
+        check(rj["snapshots"][0]["site"]["kind"] == "static" and rj["snapshots"][0]["site"]["base"] == "/vectorclad/", "the version is found to be a website, served under /vectorclad/")
+        lock = json.loads((lib / "github.com/demo/vectorclad/site/code" / rj["snapshots"][0]["folder"] / "lock.json").read_text())
+        check("https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/loaders/GLTFLoader.js" in lock["files"], "a module the import map names is saved")
+        check(any("fonts.gstatic.com" in u and u.endswith(".woff2") for u in lock["files"]), "Google Fonts' font files are saved, as a browser gets them")
+        check(len(list((lib / "_library/sites/blobs").rglob("*"))) > 4, "the saved files are kept once for the library")
+        page.goto(BASE + "/#/")
+        card = page.locator(".card[data-id='github.com/demo/vectorclad']")
+        card.wait_for()
+        check(card.locator(".site-badge").count() == 1, "the card says the project has a website")
+        page.goto(BASE + "/#/repo/github.com/demo/vectorclad?tab=site")
+        page.wait_for_selector("#site-versions")
+        check("Static website" in page.inner_text(".site-head") and "pages.yml" in page.inner_text(".site-head"), "the Website tab says what was found and why")
+        check("5 files saved" in page.inner_text("#site-versions") or "files saved" in page.inner_text("#site-versions"), "the version's saved files are listed")
+        page.click("#site-open")
+        url = f"http://vectorclad.demo.localhost:{site_port}/vectorclad/"
+        wait_for(lambda: url in opened_urls(), "Open site opens the site's own address in the browser")
+        wait_for(lambda: "hosting · port" in page.inner_text("#statusbar").lower(), "the status bar says the server is running")
+        page.screenshot(path=str(a.out / "20-site-tab.png"))
+        sp, blocked = offline_page(browser, url)
+        sp.wait_for_function("document.getElementById('status').textContent.includes('ready') && document.body.dataset.levels && document.body.dataset.fonts !== undefined", timeout=15000)
+        check(sp.inner_text("#status") == "three r170 ready", "the site runs from the library: three.js and its add-ons load from the saved copies")
+        check(sp.evaluate("document.body.dataset.levels") == "3", "the site's own files load")
+        check(not blocked, f"nothing was fetched from the internet {blocked}")
+        sp.screenshot(path=str(a.out / "21-site-offline.png"))
+        sp.context.close()
+        st, body, hd = site_get("vectorclad.demo", "/")
+        check(st == 302 and hd["Location"] == "/vectorclad/", "the site's address without its path leads to it")
+        st, body, hd = site_get("vectorclad.demo", "/vectorclad/.github/workflows/pages.yml")
+        check(st == 404, "files the published site doesn't hold aren't served")
+        st, body, hd = site_get("vectorclad.demo", "/vectorclad/", {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors", "Origin": "https://evil.example"})
+        check(st == 403, "a page on the internet can't read a hosted site")
+        st, body, hd = site_get("vectorclad.demo", "/vectorclad/", {"Host": f"vectorclad.demo.example.com:{site_port}"})
+        check(st == 421, "the server only answers to its own names")
+        code = rj["snapshots"][0]["folder"].rsplit("_", 1)[1]
+        st, body, hd = site_get(f"{code}.vectorclad.demo", "/vectorclad/about.html")
+        check(st == 200 and "About VectorClad mini" in body, "each version has an address of its own")
+        page.wait_for_selector("#site-log tr")
+        check("/vectorclad/js/main.js" in page.inner_text("#site-log"), "the Website tab lists the site's requests")
+        log = api("site_log", {"id": "github.com/demo/vectorclad"})
+        check(any("/__reposync/v/fonts.gstatic.com/" in e["path"] and e["status"] == 200 for e in log), "the web font is served from its saved copy")
+
+        # a site published to a gh-pages branch
+        dp = repos / "demo__docsite"
+        dp.mkdir()
+        git(dp, "init", "-q", "-b", "main")
+        write_files(dp, {"README.md": "# Docs site\n", "mkdocs.yml": "site_name: Docs\n", "docs/index.md": "# Hello\n"})
+        git(dp, "add", "-A")
+        git(dp, "commit", "-qm", "source")
+        git(dp, "checkout", "-q", "--orphan", "gh-pages")
+        git(dp, "rm", "-rfq", ".")
+        write_files(dp, {"index.html": "<!doctype html><title>Docs</title><h1>Built docs</h1><a href='guide/'>Guide</a>", "guide/index.html": "<title>Guide</title><p>The guide</p>", ".nojekyll": ""})
+        git(dp, "add", "-A")
+        git(dp, "commit", "-qm", "deploy")
+        git(dp, "checkout", "-q", "main")
+        api("add", {"inputs": ["https://github.com/demo/docsite"]})
+        wait_for(lambda: (lib / "github.com/demo/docsite/repo.json").is_file() and len(repo_json("github.com/demo/docsite").get("pages", [])) == 1, "the branch a site is published to is captured too", 40)
+        wait_for(idle, "the published site is captured")
+        st, body, hd = site_get("docsite.demo", "/docsite/guide")
+        check(st == 301 and hd["Location"] == "/docsite/guide/", "a folder's address gets its slash, as on GitHub Pages")
+        st, body, hd = site_get("docsite.demo", "/docsite/guide/")
+        check(st == 200 and "The guide" in body, "the site is served from its published branch")
+
+        # a website as a project of its own
+        start = f"http://127.0.0.1:{cdn_port}/live/"
+        page.goto(BASE + "/#/")
+        page.keyboard.press("n")
+        page.wait_for_selector("#add-links")
+        page.fill("#add-links", start)
+        page.wait_for_selector(".checks li")
+        check("a website" in page.inner_text(".checks"), "a web address is read as a website")
+        page.screenshot(path=str(a.out / "22-add-website.png"))
+        page.click("#add-go")
+        wid = f"web/127.0.0.1-{cdn_port}/live"
+        wait_for(lambda: (lib / wid / "repo.json").is_file(), "a website is added as a project", 40)
+        wait_for(idle, "the website is captured")
+        cap1 = repo_json(wid)["snapshots"][0]["folder"]
+        cap_dir = lib / wid / "source" / cap1
+        manifest = json.loads((cap_dir / "_mirror/manifest.json").read_text())
+        check({"live/index.html", "live/about.html", "live/news/index.html"} <= set(manifest["pages"]), "the website's pages are saved at their addresses")
+        check("live/private/secret.html" not in manifest["pages"] and manifest["robots_skipped"] == 1, "pages robots.txt asks robots to leave are left")
+        check(repo_json(wid)["details"]["name"] == "Live VectorClad", "the website is named by its title")
+        wlabel = f"live.127-0-0-1-{cdn_port}.web"
+        sp, blocked = offline_page(browser, f"http://{wlabel}.localhost:{site_port}/live/")
+        sp.wait_for_function("document.getElementById('status').textContent.includes('ready')", timeout=15000)
+        check(sp.inner_text("#status") == "three r170 ready" and not blocked, "the saved website runs offline, its CDN files saved too")
+        sp.click("text=News")
+        sp.wait_for_selector("text=Version 2 is out")
+        check(True, "the saved website's links stay in the copy")
+        sp.context.close()
+        st, body, hd = site_get(wlabel, "/live/extra.html")
+        check(st == 200 and "Not linked from anywhere" in body and (cap_dir / "live/extra.html").is_file(), "a page the capture missed is saved while browsing")
+        page.goto(BASE + f"/#/repo/{wid}")
+        page.wait_for_selector("#site-versions")
+        check(page.locator("#tab-releases").count() == 0 and page.locator("#launch").count() == 0, "a website has no releases or Launch")
+        (live / "news/index.html").write_text("<!doctype html><title>News</title><p>Version 3 is out</p>")
+        page.click("#site-capture")
+        wait_for(lambda: len(repo_json(wid)["snapshots"]) == 2, "capturing again keeps a new capture beside the first", 40)
+        wait_for(idle, "the new capture is finished")
+        page.click("#site-capture")
+        wait_for(idle, "capturing an unchanged website finishes")
+        check(len(repo_json(wid)["snapshots"]) == 2, "a capture the same as the one before isn't kept")
+        page.wait_for_selector("#site-versions tr[data-coll] >> nth=1")
+        page.locator("#site-versions [data-act=compare]").first.click()
+        page.wait_for_selector("#compare .add")
+        check("Version 3 is out" in page.inner_text("#compare") and "Version 2 is out" in page.inner_text("#compare"), "two captures can be compared, page by page")
+        page.screenshot(path=str(a.out / "23-website-compare.png"))
+
+        # building a site on this computer, only once allowed
+        bp = repos / "demo__viteapp"
+        bp.mkdir()
+        git(bp, "init", "-q", "-b", "main")
+        write_files(bp, {"package.json": json.dumps({"scripts": {"build": "vite build"}, "devDependencies": {"vite": "^5.0.0"}}),
+                         "index.html": "<!doctype html><div id=app></div><script type=module src=/src/main.ts></script>", "src/main.ts": "console.log(1)",
+                         "build.py": "import os\nos.makedirs('dist', exist_ok=True)\nopen('dist/index.html', 'w').write('<h1>Built here</h1>')\n"})
+        git(bp, "add", "-A")
+        git(bp, "commit", "-qm", "app")
+        api("add", {"inputs": ["https://github.com/demo/viteapp"]})
+        wait_for(lambda: (lib / "github.com/demo/viteapp/repo.json").is_file(), "a site that's built when published is added", 40)
+        wait_for(idle, "it's captured")
+        page.goto(BASE + "/#/repo/github.com/demo/viteapp?tab=site")
+        page.wait_for_selector("#site-versions [data-act=build]")
+        page.fill("#site-build-command", f'"{sys.executable}" build.py')
+        page.click("#site-save")
+        wait_for(lambda: repo_json("github.com/demo/viteapp").get("site", {}).get("build", {}).get("command", "").endswith("build.py"), "a build command can be set")
+        page.click("#site-versions [data-act=build]")
+        page.wait_for_selector("#confirm-ok")
+        check("own code" in page.inner_text(".dialog"), "building asks first: it runs the project's own code")
+        page.click("#confirm-ok")
+        wait_for(lambda: list((lib / "github.com/demo/viteapp/site/code").glob("*/build/index.html")), "the site is built in a copy of the version", 60)
+        wait_for(idle, "the build finishes")
+        st, body, hd = site_get("viteapp.demo", "/viteapp/")
+        check(st == 200 and "Built here" in body, "the built site is served")
+
+        # exporting a site as a repo of its own
+        page.goto(BASE + "/#/repo/github.com/demo/vectorclad?tab=site")
+        page.wait_for_selector("#site-versions [data-act=export]")
+        page.locator("#site-versions [data-act=export]").first.click()
+        exports = home / "exports"
+        exports.mkdir()
+        urllib.request.urlopen(urllib.request.Request(BASE + "/test/pick", data=json.dumps({"path": str(exports)}).encode(), method="POST"))
+        page.click("#export-pick")
+        page.wait_for_function("document.getElementById('export-form').innerText.includes('exports')")
+        page.fill("#export-name", "vectorclad-export")
+        page.screenshot(path=str(a.out / "24-export.png"))
+        page.click("#export-go")
+        ex = exports / "vectorclad-export"
+        wait_for(lambda: (ex / "README.md").is_file(), "a site is exported as a folder", 30)
+        wait_for(idle, "the export finishes")
+        html_out = (ex / "index.html").read_text(encoding="utf-8")
+        check("vendor/cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js" in html_out and "https://cdn.jsdelivr.net" not in html_out, "the export points at its own copies of the CDN files")
+        check((ex / "vendor/cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/loaders/GLTFLoader.js").is_file() and (ex / ".nojekyll").is_file() and (ex / ".github/workflows/pages.yml").is_file(), "the export holds the saved files, .nojekyll and a Pages workflow")
+        api("site_export", {"id": wid, "coll": "code", "folder": repo_json(wid)["snapshots"][-1]["folder"], "options": {"format": "zip", "dest": str(exports / "live.zip")}})
+        wait_for(lambda: (exports / "live.zip").is_file(), "a website can be exported as a ZIP", 30)
+        wait_for(idle, "the ZIP is made")
+
+        page.goto(BASE + "/#/sites")
+        page.wait_for_selector("#sites tr")
+        check(page.locator("#sites tr").count() == 4, "the Websites page lists every hosted site")
+        page.screenshot(path=str(a.out / "25-websites.png"))
+        page.goto(BASE + "/#/")
+
 
         page.click("#theme-toggle")
         page.click("#theme-toggle")
@@ -411,6 +667,7 @@ try:
 finally:
     serve.terminate()
     mock.terminate()
+    cdn.terminate()
 
 print(f"\n{len(failures)} failed" if failures else "\nall passed")
 sys.exit(1 if failures else 0)

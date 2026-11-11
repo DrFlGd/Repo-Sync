@@ -14,7 +14,7 @@ export function routeFromHash(hash) {
   const [path, query = ""] = (hash || "").replace(/^#\/?/, "").split("?");
   const q = new URLSearchParams(query);
   if (path.startsWith("repo/")) return { page: "repo", id: decodeURIComponent(path.slice(5)), tab: q.get("tab") || "readme" };
-  if (["activity", "settings", "about"].includes(path)) return { page: path };
+  if (["activity", "settings", "about", "sites"].includes(path)) return { page: path };
   return { page: "library" };
 }
 

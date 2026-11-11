@@ -8,8 +8,9 @@ import { Icon } from "./icons.js";
 import { confirmDialog } from "./dialogs.js";
 import { launch, check, openFolder, openUrl } from "./actions.js";
 import { bytes, ago, when, day, plural, short } from "../lib/format.js";
+import { SiteTab, SiteButton, openSite } from "./site.js";
 
-const KIND = { github: "GitHub", gitlab: "GitLab", gitea: "Gitea / Forgejo" };
+const KIND = { github: "GitHub", gitlab: "GitLab", gitea: "Gitea / Forgejo", web: "Website" };
 
 /** A small menu under a button; closes on a click outside or Escape. */
 function Menu({ label, title, cls = "", children, align = "left", id }) {
@@ -32,6 +33,7 @@ function Menu({ label, title, cls = "", children, align = "left", id }) {
 function LaunchControl({ repo, onChange }) {
   const [list, setList] = useState(null);
   const s = repo.summary;
+  if (s.website) return null;
   useEffect(() => {
     if (!s.launchable) { setList(null); return; }
     api("launch_list", { id: s.id }).then(setList).catch(() => setList(null));
@@ -86,7 +88,7 @@ function Readme({ repo, snapshot, setSnapshot }) {
 function Versions({ repo, showReadme, reload }) {
   const id = repo.summary.id;
   const list = [...repo.snapshots].reverse();
-  if (!list.length) return html`<p class="muted">No version of the code has been captured yet.</p>`;
+  if (!list.length) return html`<p class="muted">${repo.summary.website ? "The website hasn't been captured yet." : "No version of the code has been captured yet."}</p>`;
   const del = async (s) => {
     if (!(await confirmDialog({ title: "Delete this version?", body: `The files of ${short(s.commit)} (captured ${when(s.captured)}, ${bytes(s.bytes)}) are deleted from the library. Other versions stay.`, ok: "Delete version" }))) return;
     try { await api("version_delete", { id, kind: "source", folder: s.folder }); reload(); } catch (e) { toast(errText(e), 6000); }
@@ -99,7 +101,8 @@ function Versions({ repo, showReadme, reload }) {
       <td class="date" title=${when(s.commit_date)}>${day(s.commit_date)}</td>
       <td class="num">${s.files.toLocaleString()}</td>
       <td class="num">${bytes(s.bytes)}</td>
-      <td class="num">
+      <td class="num nowrap">
+        ${repo.summary.site && html`<button type="button" class="ghost small" title="Open this version as a website" onClick=${() => openSite(id, "code", s.folder)}>${Icon.globe(14)}</button>`}
         ${s.readme && html`<button type="button" class="ghost small" title="Show this version's readme" onClick=${() => showReadme(s.folder)}>Readme</button>`}
         <button type="button" class="ghost small" title="Open this version's folder" onClick=${() => openFolder(id, `source/${s.folder}`)}>${Icon.folder(14)}</button>
         <button type="button" class="ghost small danger" title="Delete this version" onClick=${() => del(s)}>${Icon.trash(14)}</button>
@@ -228,6 +231,21 @@ function Following({ repo, save }) {
     setF(latest.current);
     save(latest.current);
   };
+  if (repo.source.kind === "web") {
+    return html`<div class="follow" id="follow">
+      <label class="check"><input type="checkbox" id="follow-source" checked=${f.source} onChange=${(e) => set({ source: e.target.checked })} /> Capture the website at each check</label>
+      <p class="hint" style="padding-left:24px">A capture that's the same as the one before isn't kept.</p>
+      <div class="row"><span class="muted">Keep captures</span>
+        <select id="follow-keep-source" aria-label="Captures to keep" value=${f.keep_source == null ? "" : String(f.keep_source)}
+          onChange=${(e) => set({ keep_source: e.target.value === "" ? null : Number(e.target.value) })}>
+          <option value="">Library's setting (${keepLabel(lib.keep_source || 0).toLowerCase()})</option>
+          ${KEEP.map(([v]) => html`<option value=${String(v)}>${keepLabel(v)}</option>`)}</select></div>
+      <div class="row"><span class="muted">Check</span>
+        <select id="follow-every" aria-label="How often to check" value=${f.every_hours == null ? "" : String(f.every_hours)}
+          onChange=${(e) => set({ every_hours: e.target.value === "" ? null : Number(e.target.value) })}>
+          ${CHECKS.map(([v, l]) => html`<option value=${v == null ? "" : String(v)}>${l}</option>`)}</select></div>
+    </div>`;
+  }
   return html`<div class="follow" id="follow">
     <label class="check"><input type="checkbox" id="follow-source" checked=${f.source} onChange=${(e) => set({ source: e.target.checked })} /> The code</label>
     <div class="row" style="padding-left:24px"><span class="muted">Branch</span>
@@ -295,6 +313,25 @@ function Inspector({ repo, reload }) {
   const save = (follow) => send("follow_set", { id, follow });
   const saveTags = (tags) => send("tags_set", { id, tags });
   const latestSnap = repo.snapshots[repo.snapshots.length - 1];
+  if (repo.source.kind === "web") {
+    return html`<aside class="inspector" aria-label="Details">
+      <section>
+        <h2>Details</h2>
+        <dl class="props" id="props">
+          <dt>Address</dt><dd><a href=${repo.web_url} title=${repo.web_url}>${repo.web_url.replace(/^https?:\/\//, "")}</a></dd>
+          <dt>Size on disk</dt><dd id="prop-size">${bytes(s.bytes)}</dd>
+          <dt>Kept</dt><dd>${plural(repo.snapshots.length, "capture")}</dd>
+          <dt>Added</dt><dd title=${when(repo.added)}>${day(repo.added)}</dd>
+          <dt>Last changed</dt><dd title=${when(repo.last_changed)}>${repo.last_changed ? ago(repo.last_changed) : "never"}</dd>
+          <dt>Last checked</dt><dd title=${when(repo.last_checked)}>${repo.last_checked ? ago(repo.last_checked) : "never"}</dd>
+          <dt>Next check</dt><dd title=${when(s.due)}>${s.due ? ago(s.due) : "by hand"}</dd>
+          ${latestSnap && html`<dt>Pages</dt><dd>${latestSnap.files.toLocaleString()} files</dd>`}
+        </dl>
+      </section>
+      <section><h2>Your tags</h2><${Tags} repo=${repo} saveTags=${saveTags} /></section>
+      <section><h2>Follow</h2><${Following} repo=${repo} save=${save} /></section>
+    </aside>`;
+  }
   return html`<aside class="inspector" aria-label="Details">
     <section>
       <h2>Details</h2>
@@ -323,14 +360,15 @@ function Inspector({ repo, reload }) {
   </aside>`;
 }
 
-export function RepoPage({ id, tab }) {
+export function RepoPage({ id, tab: asked }) {
+  let tab = asked;
   const summary = useStore(ui, (s) => s.repos.find((r) => r.id === id));
   const [repo, setRepo] = useState(null);
   const [err, setErr] = useState("");
   const [snapshot, setSnapshot] = useState(null);
   const reload = () => api("repo", { id }).then((r) => { setRepo(r); setErr(""); }).catch((e) => setErr(errText(e)));
   // read the project again whenever a check changes it
-  const stamp = summary ? `${summary.last_checked}|${summary.status}|${summary.snapshots}|${summary.releases}` : "";
+  const stamp = summary ? `${summary.last_checked}|${summary.status}|${summary.snapshots}|${summary.releases}|${summary.pages_versions}|${summary.live_versions}` : "";
   useEffect(() => { reload(); }, [id, stamp]);
   if (err && !repo) {
     return html`<div class="page"><p class="notice error">${err}</p><a class="button" href="#/">${Icon.back(14)} Back to the library</a></div>`;
@@ -342,11 +380,16 @@ export function RepoPage({ id, tab }) {
     if (!(await confirmDialog({ title: `Remove ${s.name}?`, body: `Every captured version and release of ${id} (${bytes(s.bytes)}) is deleted from the library folder. This can't be undone.`, ok: "Remove from the library" }))) return;
     try { await api("remove", { id }); await loadRepos(); toast(`Removed ${id}`); location.hash = "#/"; } catch (e) { toast(errText(e), 6000); }
   };
-  const tabs = [["readme", "Readme", null], ["versions", "Code versions", repo.snapshots.length], ["releases", "Releases", repo.releases.length]];
+  const web = s.website;
+  const siteN = repo.snapshots.length + (repo.pages?.length || 0) + (repo.live?.length || 0);
+  const tabs = web
+    ? [["site", "Website", null], ["versions", "Captures", repo.snapshots.length]]
+    : [["readme", "Readme", null], ["versions", "Code versions", repo.snapshots.length], ["releases", "Releases", repo.releases.length], ...(s.site ? [["site", "Website", siteN]] : [])];
+  if (web && tab === "readme") tab = "site";
   return html`<div class="repo">
     <div class="repo-main">
       <header class="repo-head">
-        <nav class="crumbs" aria-label="Where"><a href="#/">Library</a><span>/</span><span>${repo.source.host}</span><span>/</span><span>${s.owner}</span></nav>
+        <nav class="crumbs" aria-label="Where"><a href="#/">Library</a><span>/</span><span>${web ? "Websites" : repo.source.host}</span><span>/</span><span>${s.owner}</span></nav>
         <div class="repo-title"><h1>${s.name}</h1>
           ${s.status === "working" && html`<span class="badge working">Downloading…</span>`}
           ${s.status === "queued" && html`<span class="badge queued">Waiting to be checked</span>`}
@@ -355,6 +398,7 @@ export function RepoPage({ id, tab }) {
         ${s.description && html`<p class="repo-desc">${s.description}</p>`}
         ${repo.last_error && html`<p class="notice error" id="repo-error">The last check didn't finish: ${repo.last_error}</p>`}
         <div class="repo-actions">
+          <${SiteButton} repo=${repo} primary=${web || !s.launchable} />
           <${LaunchControl} repo=${repo} onChange=${reload} />
           <button type="button" id="check-now" onClick=${() => check(id)} disabled=${s.status === "working" || s.status === "queued"}>${Icon.refresh(15)} Check now</button>
           <button type="button" onClick=${() => openFolder(id)} title="Open the project's folder">${Icon.folder(15)} Folder</button>
@@ -367,7 +411,8 @@ export function RepoPage({ id, tab }) {
         </div>
       </header>
       <div class="tabs" role="tablist">${tabs.map(([k, l, n]) => html`<button type="button" role="tab" id=${"tab-" + k} aria-selected=${tab === k ? "true" : "false"} onClick=${() => setTab(k)}>${l}${n != null && html`<span class="n">${n}</span>`}</button>`)}</div>
-      ${tab === "versions" ? html`<${Versions} repo=${repo} reload=${reload} showReadme=${(f) => { setSnapshot(f); setTab("readme"); }} />`
+      ${tab === "site" ? html`<${SiteTab} repo=${repo} reload=${reload} />`
+        : tab === "versions" ? html`<${Versions} repo=${repo} reload=${reload} showReadme=${(f) => { setSnapshot(f); setTab("readme"); }} />`
         : tab === "releases" ? html`<${Releases} repo=${repo} reload=${reload} />`
         : html`<${Readme} repo=${repo} snapshot=${snapshot} setSnapshot=${setSnapshot} />`}
     </div>
