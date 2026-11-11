@@ -11,6 +11,7 @@ pub mod http;
 pub mod launch;
 pub mod library;
 pub mod readme;
+pub mod sites;
 pub mod sources;
 pub mod util;
 

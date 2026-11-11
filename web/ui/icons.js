@@ -31,6 +31,9 @@ const D = {
   clock: html`<circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" />`,
   sun: html`<circle cx="12" cy="12" r="4" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2" />`,
   moon: html`<path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z" />`,
+  globe: html`<circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18" />`,
+  download: html`<path d="M12 4v11M7 10l5 5 5-5" /><path d="M4 19h16" />`,
+  compare: html`<path d="M8 4v16M16 4v16" /><path d="M3 8h5M16 16h5M3 16h2M19 8h2" />`,
   auto: html`<circle cx="12" cy="12" r="8" /><path d="M12 4v16" /><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" stroke="none" />`,
 };
 

@@ -17,7 +17,11 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, Weak};
+
+#[path = "api_site.rs"]
+mod site;
+pub use site::SiteTask;
 
 pub struct AppPaths {
     pub config_dir: PathBuf,
@@ -44,6 +48,21 @@ pub enum JobKind {
         id: String,
         tag: String,
     },
+    /// Add a website as a project, then capture it.
+    #[serde(rename = "add_website")]
+    AddWeb {
+        url: String,
+        follow: Follow,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mirror: Option<crate::sites::MirrorSettings>,
+    },
+    /// Work on a project's website (save its files, capture, build, export).
+    Site {
+        #[serde(rename = "project")]
+        id: String,
+        #[serde(flatten)]
+        task: SiteTask,
+    },
 }
 
 impl JobKind {
@@ -53,6 +72,8 @@ impl JobKind {
         match (self, other) {
             (JobKind::Release { tag: a, .. }, JobKind::Release { tag: b, .. }) => a == b,
             (JobKind::Release { .. }, _) | (_, JobKind::Release { .. }) => false,
+            (JobKind::Site { task: a, .. }, JobKind::Site { task: b, .. }) => a == b,
+            (JobKind::Site { .. }, _) | (_, JobKind::Site { .. }) => false,
             _ => true,
         }
     }
@@ -106,6 +127,9 @@ pub struct App {
     client: Arc<Client>,
     /// Readme text by project, for search: (snapshot folder, lower-case text).
     readmes: Mutex<HashMap<String, (String, String)>>,
+    /// The app itself, for the site server's threads.
+    me: Weak<App>,
+    site: site::SiteState,
 }
 
 impl App {
@@ -115,7 +139,9 @@ impl App {
         let cfg_file = paths.config_dir.join("config.json");
         let config = AppConfig::load(&cfg_file);
         let prefs = Prefs::new(paths.config_dir.join("prefs.json"));
-        let app = Arc::new(Self {
+        let app = Arc::new_cyclic(|me| Self {
+            me: me.clone(),
+            site: Self::site_state_new(),
             paths,
             config: Mutex::new(config),
             prefs,
@@ -282,7 +308,10 @@ impl App {
                     Ok(json!(p.display().to_string()))
                 })
             }
-            other => bail!("unknown command {other}"),
+            other => match self.site_dispatch(other, a)? {
+                Some(v) => Ok(v),
+                None => bail!("unknown command {other}"),
+            },
         }
     }
 
@@ -297,6 +326,7 @@ impl App {
             "library_error": *self.lib_error.lock().unwrap(),
             "recent_libraries": cfg.recent_libraries.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
             "default_library": crate::config::default_library_path().display().to_string(),
+            "hosting": self.server_port(),
         })
     }
 
@@ -374,12 +404,17 @@ impl App {
             "launchable": launchable.map(|x| x.folder.clone()),
             "follow": r.follow,
             "due": due_at(r, &l.settings).map(crate::util::iso_from_unix),
+            "site": site::badge(self, l, r),
+            "website": r.source.kind == Kind::Web,
+            "pages_versions": r.pages.len(),
+            "live_versions": r.live.len(),
         })
     }
 
     fn readme_text(&self, l: &Library, r: &Repo) -> String {
         let Some(s) = r.latest_snapshot() else { return String::new() };
-        if s.readme.is_empty() {
+        let web = r.source.kind == Kind::Web;
+        if s.readme.is_empty() && !web {
             return String::new();
         }
         let id = r.id();
@@ -388,8 +423,9 @@ impl App {
                 return text.clone();
             }
         }
-        let p = l.folder_of(&id).join("source").join(&s.folder).join(&s.readme);
-        let mut text = std::fs::read(&p).map(|b| String::from_utf8_lossy(&b).to_lowercase()).unwrap_or_default();
+        let dir = l.folder_of(&id).join("source").join(&s.folder);
+        // a website's words stand in for a readme
+        let mut text = if web { crate::sites::mirror::text_of(&dir).to_lowercase() } else { std::fs::read(dir.join(&s.readme)).map(|b| String::from_utf8_lossy(&b).to_lowercase()).unwrap_or_default() };
         text.truncate(text.char_indices().nth(200_000).map(|(i, _)| i).unwrap_or(text.len()));
         self.readmes.lock().unwrap().insert(id, (s.folder.clone(), text.clone()));
         text
@@ -460,6 +496,7 @@ impl App {
                 Kind::GitHub => format!("{web_root}/blob/{}/", s.commit),
                 Kind::GitLab => format!("{web_root}/-/blob/{}/", s.commit),
                 Kind::Gitea => format!("{web_root}/src/commit/{}/", s.commit),
+                Kind::Web => web_root.clone(),
             };
             let dir = s.readme.rsplit_once('/').map(|(d, _)| format!("{d}/")).unwrap_or_default();
             let bases = readme::Bases { files: format!("{}source/{}/", self.file_base(id), percent_encode(&s.folder)), web, dir };
@@ -489,6 +526,13 @@ impl App {
                     continue;
                 }
             }
+            if looks_like_website(line) {
+                let start = crate::sites::mirror::normalise_start(line)?;
+                let id = sources::web_source(&start).id();
+                let have = self.with_lib(|l| Ok(l.repos.contains_key(&id))).unwrap_or(false);
+                out.push(json!({ "input": line, "ok": true, "website": true, "id": id, "host": start.host_str(), "url": start.to_string(), "in_library": have }));
+                continue;
+            }
             out.push(match sources::parse_url(line) {
                 Ok(p) => {
                     let id = format!("{}/{}", p.host, p.path);
@@ -517,8 +561,25 @@ impl App {
         };
         let forks = a["forks"].as_bool().unwrap_or(false);
         let watch = a["watch"].as_bool().unwrap_or(true);
+        let as_website = a["website"].as_bool().unwrap_or(false);
+        let mirror: Option<crate::sites::MirrorSettings> = if a["mirror"].is_object() { Some(serde_json::from_value(a["mirror"].clone()).context("those capture settings can't be read")?) } else { None };
         let mut out = vec![];
         for input in inputs {
+            if as_website || looks_like_website(&input) {
+                match crate::sites::mirror::normalise_start(&input) {
+                    Err(e) => out.push(json!({ "input": input, "error": e.to_string() })),
+                    Ok(start) => {
+                        let id = sources::web_source(&start).id();
+                        if self.with_lib(|l| Ok(l.repos.contains_key(&id)))? {
+                            out.push(json!({ "input": input, "id": id, "error": "already in the library" }));
+                            continue;
+                        }
+                        let job = self.enqueue(JobKind::AddWeb { url: start.to_string(), follow: follow.clone(), mirror: mirror.clone() }, id.clone(), "you");
+                        out.push(json!({ "input": input, "id": id, "job": job, "website": true }));
+                    }
+                }
+                continue;
+            }
             if let (Err(_), Some(acc)) = (sources::parse_url(&input), sources::parse_account(&input)) {
                 let key = format!("account:{}", acc.id());
                 let id = acc.id();
@@ -573,6 +634,7 @@ impl App {
             }
             let dir = l.folder_of(id);
             std::fs::remove_dir_all(&dir).with_context(|| format!("couldn't remove {}", dir.display()))?;
+            site::sweep(l);
             // tidy the owner's and host's folders when they're empty now
             let mut p = dir.parent().map(PathBuf::from);
             while let Some(d) = p {
@@ -608,14 +670,32 @@ impl App {
                     }
                     "releases"
                 }
+                "pages" | "live" => {
+                    let list = if kind == "pages" { &mut r.pages } else { &mut r.live };
+                    let n = list.len();
+                    list.retain(|s| s.folder != folder);
+                    if list.len() == n {
+                        bail!("That version isn't in the library.");
+                    }
+                    kind
+                }
                 _ => bail!("unknown kind of version"),
             };
-            let dir = l.folder_of(id).join(sub).join(crate::util::safe_rel(std::path::Path::new(folder)).context("not a version's folder")?);
+            let rel = crate::util::safe_rel(std::path::Path::new(folder)).context("not a version's folder")?;
+            let dir = l.folder_of(id).join(sub).join(&rel);
             if dir.exists() {
                 std::fs::remove_dir_all(&dir).with_context(|| format!("couldn't remove {}", dir.display()))?;
             }
+            if sub != "releases" {
+                let key = if sub == "source" { "code" } else { sub };
+                let _ = std::fs::remove_dir_all(l.folder_of(id).join("site").join(key).join(&rel));
+                if r.site.pin == format!("{key}/{folder}") {
+                    r.site.pin.clear();
+                }
+            }
             l.save_repo(&r)?;
             l.repos.insert(id.to_string(), r);
+            site::sweep(l);
             Ok(())
         })?;
         self.repo(id)
@@ -737,6 +817,8 @@ impl App {
                 JobKind::Check { id } => self.run_check(id, &progress, &stage),
                 JobKind::Release { id, tag } => self.run_release(id, tag, &progress, &stage),
                 JobKind::Account { account, follow, forks, watch } => self.run_account(account, follow, *forks, *watch, &stage),
+                JobKind::AddWeb { url, follow, mirror } => self.run_add_web(url, follow, mirror.as_ref(), &progress, &stage),
+                JobKind::Site { id, task } => self.run_site(id, task, &progress, &stage),
             };
             let mut j = self.jobs.lock().unwrap();
             j.current = None;
@@ -778,8 +860,11 @@ impl App {
             Ok(l.folder_of(&id))
         })?;
         let limits = self.limits(&repo.follow);
-        let res = capture::update(&mut repo, &folder, src.as_ref(), &self.client, progress, stage, &limits);
+        let mut res = capture::update(&mut repo, &folder, src.as_ref(), &self.client, progress, stage, &limits);
         self.store(&id, &repo, &res)?;
+        if let Ok(o) = &mut res {
+            self.after_capture(&id, o, progress, stage);
+        }
         res
     }
 
@@ -787,8 +872,11 @@ impl App {
         let (mut repo, folder) = self.with_lib(|l| Ok((l.repos.get(id).cloned().context("That project isn't in the library any more.")?, l.folder_of(id))))?;
         let src = sources::open(&repo.source, &self.tokens(), self.client.clone());
         let limits = self.limits(&repo.follow);
-        let res = capture::update(&mut repo, &folder, src.as_ref(), &self.client, progress, stage, &limits);
+        let mut res = capture::update(&mut repo, &folder, src.as_ref(), &self.client, progress, stage, &limits);
         self.store(id, &repo, &res)?;
+        if let Ok(o) = &mut res {
+            self.after_capture(id, o, progress, stage);
+        }
         res
     }
 
@@ -901,6 +989,8 @@ impl App {
             r.details = checked.details.clone();
             r.snapshots = checked.snapshots.clone();
             r.releases = checked.releases.clone();
+            r.pages = checked.pages.clone();
+            r.live = checked.live.clone();
             match res {
                 Ok(_) => {
                     r.last_checked = checked.last_checked.clone();
@@ -922,11 +1012,42 @@ impl App {
 /// When a project is next due a check (seconds since 1970), None when it's only checked by hand.
 fn due_at(r: &Repo, s: &Settings) -> Option<i64> {
     let hours = r.follow.every_hours.unwrap_or(s.check_every_hours);
-    if hours <= 0.0 || !(r.follow.source || r.follow.releases) {
+    if hours <= 0.0 || !(r.follow.source || r.follow.releases || r.follow.live) {
         return None;
     }
     let last = unix_from_iso(&r.last_checked).or_else(|| unix_from_iso(&r.added)).unwrap_or(0);
     Some(last + (hours * 3600.0) as i64)
+}
+
+/// A web address that isn't a repository or an account: added as a website.
+fn looks_like_website(input: &str) -> bool {
+    let t = input.trim();
+    if t.is_empty() || t.contains(char::is_whitespace) || t.starts_with("git@") {
+        return false;
+    }
+    let Ok(u) = crate::sites::mirror::normalise_start(t) else { return false };
+    let host = u.host_str().unwrap_or("").to_ascii_lowercase();
+    let host = host.strip_prefix("www.").unwrap_or(&host);
+    if sources::kind_of_host(host).is_some() {
+        // github.com/owner/name is a repo, github.com/owner an account
+        return false;
+    }
+    if host.ends_with(".github.io") || host.ends_with(".gitlab.io") || host.ends_with(".codeberg.page") {
+        return true;
+    }
+    if !host.contains('.') && !t.contains("://") {
+        // "owner/name" on GitHub
+        return false;
+    }
+    // on a server the app doesn't know, a repo's link is just owner/name
+    sources::parse_url(t).is_err() || looks_like_page(&u)
+}
+
+/// An address that names a page rather than a repo on an unknown server: no path,
+/// or one ending in a file name or "/".
+fn looks_like_page(u: &url::Url) -> bool {
+    let segs: Vec<&str> = u.path().split('/').filter(|s| !s.is_empty()).collect();
+    segs.len() != 2 || u.path().ends_with('/') || segs.last().is_some_and(|s| s.contains('.'))
 }
 
 fn plural(n: usize, word: &str) -> String {
@@ -943,6 +1064,12 @@ fn describe(o: &Outcome) -> String {
     }
     if let Some(r) = &o.release {
         parts.push(format!("new release {r}"));
+    }
+    if let Some(p) = &o.pages {
+        parts.push(format!("new version of the published website ({p})"));
+    }
+    if let Some(p) = &o.live {
+        parts.push(format!("new capture of the live website ({p})"));
     }
     let mut msg = if parts.is_empty() { "Up to date".to_string() } else { format!("Captured: {}", parts.join(", ")) };
     if !o.removed.is_empty() {

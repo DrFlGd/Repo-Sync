@@ -7,7 +7,8 @@ use crate::archive;
 use crate::http::{Client, Progress};
 use crate::launch::for_this_computer;
 use crate::library::{AssetRecord, Files, ReleaseRecord, Repo, Snapshot, PARTIAL_DIR};
-use crate::sources::{Release, Source};
+use crate::sites::{self, SiteInfo, SiteKind};
+use crate::sources::{Kind, Release, Source};
 use crate::util::{dir_size, now_iso, now_unix, safe_name, stamp_from_unix, unix_from_iso};
 use anyhow::{bail, Context, Result};
 use std::path::Path;
@@ -20,6 +21,12 @@ pub struct Outcome {
     pub snapshot: Option<String>,
     /// The new release's tag, when there was one.
     pub release: Option<String>,
+    /// A new version of the branch the website is published to (pages/).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pages: Option<String>,
+    /// A new capture of the live website (live/).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub live: Option<String>,
     /// Something went wrong with one part but the rest was done.
     pub warnings: Vec<String>,
     /// Older versions and releases deleted to stay within the limits to keep.
@@ -56,17 +63,54 @@ pub fn update(repo: &mut Repo, folder: &Path, src: &dyn Source, client: &Client,
     let mut out = Outcome::default();
 
     set(stage, "Reading the project's details");
-    let details = src.details()?;
+    let mut details = src.details()?;
+    if details.has_pages {
+        details.pages = src.pages().ok().flatten();
+    }
+    if repo.source.kind == Kind::Web {
+        // a website: its details are its own, from the capture
+        details.name = repo.details.name.clone();
+        details.description = repo.details.description.clone();
+        details.web_url = repo.site.live_url.clone();
+    }
     repo.details = details;
 
-    if repo.follow.source {
+    if repo.source.kind == Kind::Web {
+        if repo.follow.source {
+            let url = repo.site.live_url.clone();
+            match capture_website(repo, folder, sites::Coll::Code, &url, client, progress, stage) {
+                Ok(s) => out.snapshot = s,
+                Err(e) if progress.stopped() || repo.snapshots.is_empty() => return Err(e),
+                Err(e) => out.warnings.push(format!("Website: {e:#}")),
+            }
+        }
+    } else if repo.follow.source {
         match capture_source(repo, folder, src, client, progress, stage) {
             Ok(s) => out.snapshot = s,
             Err(e) if progress.stopped() => return Err(e),
             Err(e) => out.warnings.push(format!("Source: {e:#}")),
         }
     }
-    if repo.follow.releases {
+    if repo.source.kind != Kind::Web && repo.follow.site_branch {
+        if let Some(branch) = site_branch(repo) {
+            match capture_pages(repo, folder, &branch, src, client, progress, stage) {
+                Ok(s) => out.pages = s,
+                Err(e) if progress.stopped() => return Err(e),
+                Err(e) => out.warnings.push(format!("Website branch {branch}: {e:#}")),
+            }
+        }
+    }
+    if repo.source.kind != Kind::Web && repo.follow.live {
+        let url = live_url(repo);
+        if !url.is_empty() {
+            match capture_website(repo, folder, sites::Coll::Live, &url, client, progress, stage) {
+                Ok(s) => out.live = s,
+                Err(e) if progress.stopped() => return Err(e),
+                Err(e) => out.warnings.push(format!("Live website: {e:#}")),
+            }
+        }
+    }
+    if repo.follow.releases && repo.source.kind != Kind::Web {
         match capture_release(repo, folder, src, client, progress, stage, limits) {
             Ok(r) => out.release = r,
             Err(e) if progress.stopped() => return Err(e),
@@ -76,7 +120,7 @@ pub fn update(repo: &mut Repo, folder: &Path, src: &dyn Source, client: &Client,
     let _ = std::fs::remove_dir_all(&partial);
     out.removed = prune(repo, folder, limits);
     repo.last_checked = now_iso();
-    if out.snapshot.is_some() || out.release.is_some() {
+    if out.snapshot.is_some() || out.release.is_some() || out.pages.is_some() || out.live.is_some() {
         repo.last_changed = repo.last_checked.clone();
     }
     repo.last_error = out.warnings.join("\n");
@@ -88,32 +132,46 @@ fn capture_source(repo: &mut Repo, folder: &Path, src: &dyn Source, client: &Cli
     if branch.is_empty() {
         bail!("the project has no default branch (is it empty?)");
     }
+    let Some(mut snap) = capture_branch(&repo.snapshots, folder, "source", &branch, src, client, progress, stage)? else { return Ok(None) };
+    let dest = folder.join("source").join(&snap.folder);
+    let hints = sites::detect::Hints { has_pages: repo.details.has_pages, pages: repo.details.pages.clone(), default_branch: repo.details.default_branch.clone(), branch: branch.clone() };
+    snap.site = Some(sites::detect::detect(&dest, &repo.source, &hints));
+    let name = snap.folder.clone();
+    repo.snapshots.push(snap);
+    Ok(Some(name))
+}
+
+/// The newest commit of `branch` into a new folder under `sub`, unless a version in
+/// `have` is of that commit already.
+#[allow(clippy::too_many_arguments)]
+fn capture_branch(have: &[Snapshot], folder: &Path, sub: &str, branch: &str, src: &dyn Source, client: &Client, progress: &Progress, stage: &Stage) -> Result<Option<Snapshot>> {
     set(stage, format!("Checking the {branch} branch"));
-    let commit = src.commit(&branch)?;
-    if repo.snapshots.iter().any(|s| s.commit == commit.sha) {
+    let commit = src.commit(branch)?;
+    if have.iter().any(|s| s.commit == commit.sha) {
         return Ok(None);
     }
     let short = &commit.sha[..commit.sha.len().min(7)];
-    set(stage, format!("Downloading the code at {short}"));
+    set(stage, format!("Downloading the {branch} branch at {short}"));
     let partial = folder.join(PARTIAL_DIR);
     let zip = partial.join("source.zip");
     let (url, headers) = src.source_zip(&commit.sha);
     client.download(&url, &headers, &zip, progress, 0, "the server", "the code")?;
-    set(stage, format!("Unpacking the code at {short}"));
+    set(stage, format!("Unpacking the {branch} branch at {short}"));
     let tmp = partial.join("source");
+    let _ = std::fs::remove_dir_all(&tmp);
     archive::unzip(&zip, &tmp, true, Some(progress))?;
     let _ = std::fs::remove_file(&zip);
     let mut name = format!("{}_{short}", stamp_from_unix(now_unix()));
-    while folder.join("source").join(&name).exists() {
+    while folder.join(sub).join(&name).exists() {
         name.push('_');
     }
-    let dest = folder.join("source").join(&name);
+    let dest = folder.join(sub).join(&name);
     std::fs::create_dir_all(dest.parent().unwrap())?;
     std::fs::rename(&tmp, &dest).with_context(|| format!("couldn't move the code into {}", dest.display()))?;
     let (bytes, files) = dir_size(&dest);
-    repo.snapshots.push(Snapshot {
+    Ok(Some(Snapshot {
         folder: name.clone(),
-        branch,
+        branch: branch.to_string(),
         commit: commit.sha.clone(),
         commit_date: commit.date,
         message: commit.message.lines().next().unwrap_or("").to_string(),
@@ -121,7 +179,102 @@ fn capture_source(repo: &mut Repo, folder: &Path, src: &dyn Source, client: &Cli
         bytes,
         files,
         readme: find_readme(&dest),
-    });
+        site: None,
+    }))
+}
+
+/// The branch the project's website is published to, when it isn't the one
+/// followed: from the workflow that publishes it, or the server's Pages settings.
+pub fn site_branch(repo: &Repo) -> Option<String> {
+    let followed = if repo.follow.branch.trim().is_empty() { repo.details.default_branch.as_str() } else { repo.follow.branch.trim() };
+    let from_workflow = repo.latest_snapshot().and_then(|s| s.site.as_ref()).filter(|i| i.kind == SiteKind::Branch && !i.branch.is_empty()).map(|i| i.branch.clone());
+    let from_server = repo.details.pages.as_ref().filter(|p| p.build_type != "workflow" && !p.branch.is_empty()).map(|p| p.branch.clone());
+    from_workflow.or(from_server).filter(|b| b != followed)
+}
+
+/// The live website's address: the site settings', else the server's Pages
+/// address, else the project's homepage.
+pub fn live_url(repo: &Repo) -> String {
+    if !repo.site.live_url.trim().is_empty() {
+        return repo.site.live_url.trim().to_string();
+    }
+    if let Some(u) = repo.details.pages.as_ref().map(|p| p.url.clone()).filter(|u| !u.is_empty()) {
+        return u;
+    }
+    let h = repo.details.homepage.trim();
+    if h.starts_with("http://") || h.starts_with("https://") {
+        return h.to_string();
+    }
+    String::new()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn capture_pages(repo: &mut Repo, folder: &Path, branch: &str, src: &dyn Source, client: &Client, progress: &Progress, stage: &Stage) -> Result<Option<String>> {
+    let Some(mut snap) = capture_branch(&repo.pages, folder, "pages", branch, src, client, progress, stage)? else { return Ok(None) };
+    let dest = folder.join("pages").join(&snap.folder);
+    let mut info = sites::detect::detect_branch(&dest, &repo.source);
+    // the server's Pages settings may publish a folder of the branch ("/docs")
+    if let Some(p) = repo.details.pages.as_ref().filter(|p| p.branch == branch) {
+        let sub = p.path.trim_matches('/');
+        if !sub.is_empty() && dest.join(sub).is_dir() {
+            info.root = sub.to_string();
+        }
+        if !p.cname.is_empty() {
+            info.cname = p.cname.clone();
+            info.base = "/".into();
+        }
+    }
+    snap.site = Some(info);
+    let name = snap.folder.clone();
+    repo.pages.push(snap);
+    Ok(Some(name))
+}
+
+/// Save the website at `url` as a new version in `coll` (a website project's
+/// captures, or a project's live captures), unless it hasn't changed.
+pub fn capture_website(repo: &mut Repo, folder: &Path, coll: sites::Coll, url: &str, client: &Client, progress: &Progress, stage: &Stage) -> Result<Option<String>> {
+    if url.trim().is_empty() {
+        bail!("there's no address to capture the website from");
+    }
+    let list = if coll == sites::Coll::Live { &repo.live } else { &repo.snapshots };
+    let prev = list.last().map(|s| folder.join(coll.dir()).join(&s.folder));
+    let c = sites::mirror::capture(url, &folder.join(coll.dir()), &repo.site.mirror, prev.as_deref(), client, progress, stage)?;
+    let Some(name) = c.folder else { return Ok(None) };
+    let dest = folder.join(coll.dir()).join(&name);
+    let (bytes, files) = dir_size(&dest);
+    let start = sites::mirror::normalise_start(url)?;
+    let entry = start.path().trim_start_matches('/');
+    let entry = if entry.ends_with('/') || entry.is_empty() { entry.to_string() } else { entry.rsplit_once('/').map(|(d, _)| format!("{d}/")).unwrap_or_default() };
+    let info = SiteInfo {
+        kind: SiteKind::Mirror,
+        base: "/".into(),
+        entry,
+        has_404: dest.join("404.html").is_file(),
+        evidence: vec![format!("Captured from {} ({} pages, {} other files)", start, c.pages, c.files)],
+        warnings: if c.skipped > 0 { vec![format!("{} addresses couldn't be saved; the capture's manifest lists them", c.skipped)] } else { vec![] },
+        ..Default::default()
+    };
+    let snap = Snapshot {
+        folder: name.clone(),
+        branch: String::new(),
+        commit: name.rsplit('_').next().unwrap_or("").to_string(),
+        commit_date: String::new(),
+        message: c.title.clone(),
+        captured: now_iso(),
+        bytes,
+        files,
+        readme: String::new(),
+        site: Some(info),
+    };
+    if coll == sites::Coll::Live {
+        repo.live.push(snap);
+    } else {
+        // a website is named by its title, as it is now
+        if !c.title.is_empty() {
+            repo.details.name = c.title.clone();
+        }
+        repo.snapshots.push(snap);
+    }
     Ok(Some(name))
 }
 
@@ -177,10 +330,24 @@ fn capture_release(repo: &mut Repo, folder: &Path, src: &dyn Source, client: &Cl
 pub fn prune(repo: &mut Repo, folder: &Path, limits: &Limits) -> Vec<String> {
     let mut gone = vec![];
     if limits.keep_source > 0 {
-        while repo.snapshots.len() > limits.keep_source as usize {
-            let s = repo.snapshots.remove(0);
-            if std::fs::remove_dir_all(folder.join("source").join(&s.folder)).is_ok() || !folder.join("source").join(&s.folder).exists() {
-                gone.push(format!("code {}", &s.commit[..s.commit.len().min(7)]));
+        for coll in [sites::Coll::Code, sites::Coll::Pages, sites::Coll::Live] {
+            let list = match coll {
+                sites::Coll::Code => &mut repo.snapshots,
+                sites::Coll::Pages => &mut repo.pages,
+                sites::Coll::Live => &mut repo.live,
+            };
+            while list.len() > limits.keep_source as usize {
+                let s = list.remove(0);
+                let dir = folder.join(coll.dir()).join(&s.folder);
+                let _ = std::fs::remove_dir_all(folder.join("site").join(coll.key()).join(&s.folder));
+                if std::fs::remove_dir_all(&dir).is_ok() || !dir.exists() {
+                    let what = match coll {
+                        sites::Coll::Code => "code",
+                        sites::Coll::Pages => "website branch",
+                        sites::Coll::Live => "live capture",
+                    };
+                    gone.push(format!("{what} {}", &s.commit[..s.commit.len().min(7)]));
+                }
             }
         }
     }

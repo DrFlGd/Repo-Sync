@@ -30,6 +30,19 @@ pub struct Client {
     agent: ureq::Agent,
     /// For this computer and hosts in NO_PROXY: never through a proxy.
     direct: ureq::Agent,
+    /// Short timeouts, for a page waiting on a file (a hosted site's missing file).
+    quick: ureq::Agent,
+    quick_direct: ureq::Agent,
+}
+
+/// A file fetched whole (a website's page or a CDN's script).
+pub struct Fetched {
+    pub status: u16,
+    /// The content type the server gave ("" when none).
+    pub ctype: String,
+    pub body: Vec<u8>,
+    /// The address it came from in the end (after redirects).
+    pub url: String,
 }
 
 /// A header for one request (name, value).
@@ -37,15 +50,15 @@ pub type Header = (&'static str, String);
 
 impl Client {
     pub fn new() -> Self {
-        let build = |proxy: bool| {
+        let build = |proxy: bool, connect: u64, read: u64| {
             ureq::AgentBuilder::new()
-                .timeout_connect(std::time::Duration::from_secs(20))
-                .timeout_read(std::time::Duration::from_secs(120))
+                .timeout_connect(std::time::Duration::from_secs(connect))
+                .timeout_read(std::time::Duration::from_secs(read))
                 .try_proxy_from_env(proxy)
                 .user_agent(&format!("Repo-Sync/{}", crate::VERSION))
                 .build()
         };
-        Self { agent: build(true), direct: build(false) }
+        Self { agent: build(true, 20, 120), direct: build(false, 20, 120), quick: build(true, 5, 30), quick_direct: build(false, 5, 30) }
     }
 
     fn get(&self, url: &str, headers: &[Header]) -> ureq::Request {
@@ -120,6 +133,67 @@ impl Client {
         }
         Ok(n)
     }
+}
+
+impl Client {
+    /// GET a whole file (at most `max` bytes). A 4xx or 5xx answer is returned
+    /// with its status, not as an error; an error is a network failure.
+    /// `REPOSYNC_VENDOR` ("host=url;host=url") sends requests for a host
+    /// elsewhere (the tests point CDNs at a stand-in), keeping the real address.
+    pub fn fetch(&self, url: &str, headers: &[Header], max: u64, quick: bool) -> Result<Fetched> {
+        let (real, mapped) = vendor_override(url);
+        let direct = no_proxy(&real);
+        let agent = match (quick, direct) {
+            (true, true) => &self.quick_direct,
+            (true, false) => &self.quick,
+            (false, true) => &self.direct,
+            (false, false) => &self.agent,
+        };
+        let mut r = agent.get(&real);
+        for (k, v) in headers {
+            r = r.set(k, v);
+        }
+        let resp = match r.call() {
+            Ok(resp) => resp,
+            Err(ureq::Error::Status(_, resp)) => resp,
+            Err(ureq::Error::Transport(t)) => anyhow::bail!("couldn't reach {}: {t}", host_of(url)),
+        };
+        let status = resp.status();
+        let ctype = resp.header("content-type").unwrap_or("").to_string();
+        let mut final_url = resp.get_url().to_string();
+        if let Some((from, to)) = &mapped {
+            if let Some(rest) = final_url.strip_prefix(to.as_str()) {
+                final_url = format!("{from}{rest}");
+            }
+        }
+        let mut body = vec![];
+        resp.into_reader().take(max + 1).read_to_end(&mut body).with_context(|| format!("the download of {url} broke off"))?;
+        if body.len() as u64 > max {
+            anyhow::bail!("{url} is over {} MB", max >> 20);
+        }
+        Ok(Fetched { status, ctype, body, url: final_url })
+    }
+}
+
+fn host_of(url: &str) -> &str {
+    url.split_once("://").map(|(_, r)| r).unwrap_or(url).split(['/', '?', '#']).next().unwrap_or("")
+}
+
+/// The address to ask for `url` (REPOSYNC_VENDOR), and what was swapped: ("https://host", "http://stand-in").
+fn vendor_override(url: &str) -> (String, Option<(String, String)>) {
+    let Ok(over) = std::env::var("REPOSYNC_VENDOR") else { return (url.to_string(), None) };
+    let host = host_of(url).to_ascii_lowercase();
+    for pair in over.split(';') {
+        if let Some((h, base)) = pair.split_once('=') {
+            if h.trim().eq_ignore_ascii_case(&host) {
+                let scheme_host = format!("{}://{}", url.split_once("://").map(|(s, _)| s).unwrap_or("https"), host_of(url));
+                let rest = &url[scheme_host.len().min(url.len())..];
+                let base = base.trim().trim_end_matches('/').to_string();
+                return (format!("{base}{rest}"), Some((scheme_host, base)));
+            }
+        }
+    }
+    (url.to_string(), None)
 }
 
 impl Default for Client {

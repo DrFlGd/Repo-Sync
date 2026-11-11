@@ -50,11 +50,15 @@ pub struct Follow {
     pub keep_source: Option<u32>,
     /// How many releases to keep (those picked by hand aside), as `keep_source`.
     pub keep_releases: Option<u32>,
+    /// Capture the branch a project's website is published to (gh-pages), when it has one.
+    pub site_branch: bool,
+    /// Capture the live website at each check (its address is in the site settings).
+    pub live: bool,
 }
 
 impl Default for Follow {
     fn default() -> Self {
-        Self { source: true, branch: String::new(), releases: true, prereleases: false, files: Files::All, every_hours: None, keep_source: None, keep_releases: None }
+        Self { source: true, branch: String::new(), releases: true, prereleases: false, files: Files::All, every_hours: None, keep_source: None, keep_releases: None, site_branch: true, live: false }
     }
 }
 
@@ -73,6 +77,9 @@ pub struct Snapshot {
     pub files: u64,
     /// The readme, relative to the snapshot's folder ("" when there's none).
     pub readme: String,
+    /// What the version holds as a website (worked out when it's captured).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub site: Option<crate::sites::SiteInfo>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -140,6 +147,15 @@ pub struct Repo {
     pub releases: Vec<ReleaseRecord>,
     #[serde(default)]
     pub launch: LaunchPick,
+    /// Versions of the branch the website is published to (pages/), oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pages: Vec<Snapshot>,
+    /// Captures of the live website (live/), oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub live: Vec<Snapshot>,
+    /// The website settings.
+    #[serde(default, skip_serializing_if = "crate::sites::SiteSettings::is_default")]
+    pub site: crate::sites::SiteSettings,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -159,6 +175,9 @@ impl Repo {
             snapshots: vec![],
             releases: vec![],
             launch: LaunchPick::default(),
+            pages: vec![],
+            live: vec![],
+            site: crate::sites::SiteSettings::default(),
             extra: Map::new(),
         }
     }
@@ -172,7 +191,7 @@ impl Repo {
         self.releases.last()
     }
     pub fn bytes(&self) -> u64 {
-        self.snapshots.iter().map(|s| s.bytes).sum::<u64>() + self.releases.iter().map(|r| r.bytes).sum::<u64>()
+        self.snapshots.iter().chain(&self.pages).chain(&self.live).map(|s| s.bytes).sum::<u64>() + self.releases.iter().map(|r| r.bytes).sum::<u64>()
     }
 }
 

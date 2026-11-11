@@ -60,11 +60,12 @@ fn open_url(app: AppHandle, url: String) -> Result<(), String> {
 }
 
 /// The app's own addresses. Anything else a link in a readme leads to opens in
-/// the browser instead of replacing the app.
+/// the browser instead of replacing the app. Hosted sites (`<name>.localhost:<port>`)
+/// are other addresses too: they open in the browser, never with the app's commands.
 fn in_app(url: &tauri::Url) -> bool {
     match url.scheme() {
         "tauri" | "library" | "asset" | "ipc" | "about" | "blob" | "data" => true,
-        "http" | "https" => url.host_str().is_some_and(|h| h == "localhost" || h == "127.0.0.1" || h.ends_with(".localhost")),
+        "http" | "https" => url.port().is_none() && url.host_str().is_some_and(|h| matches!(h, "tauri.localhost" | "library.localhost" | "ipc.localhost" | "asset.localhost")),
         _ => false,
     }
 }
@@ -76,21 +77,7 @@ fn open_outside(app: &AppHandle, url: &tauri::Url) {
 }
 
 fn mime(path: &str) -> &'static str {
-    match path.rsplit('.').next().unwrap_or("").to_ascii_lowercase().as_str() {
-        "webp" => "image/webp",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "svg" => "image/svg+xml",
-        "gif" => "image/gif",
-        "ico" => "image/x-icon",
-        "avif" => "image/avif",
-        "bmp" => "image/bmp",
-        "mp4" => "video/mp4",
-        "webm" => "video/webm",
-        "json" => "application/json",
-        "txt" | "md" => "text/plain; charset=utf-8",
-        _ => "application/octet-stream",
-    }
+    reposync_core::sites::mime::for_path(path)
 }
 
 fn main() {

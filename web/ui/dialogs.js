@@ -19,6 +19,7 @@ function AddDialog({ text }) {
   const [busy, setBusy] = useState(false);
   const [watch, setWatch] = useState(true);
   const [forks, setForks] = useState(false);
+  const [asSites, setAsSites] = useState(false);
   const [err, setErr] = useState("");
   const box = useRef(null);
   useEffect(() => {
@@ -33,13 +34,14 @@ function AddDialog({ text }) {
   }, [value]);
   const good = checks.filter((c) => c.ok && !c.in_library);
   const accounts = good.filter((c) => c.account);
+  const sites = good.filter((c) => c.website);
   const add = async (e) => {
     e?.preventDefault();
     if (!good.length || busy) return;
     setBusy(true);
     setErr("");
     try {
-      const res = await api("add", { inputs: good.map((c) => c.input), follow, watch, forks });
+      const res = await api("add", { inputs: good.map((c) => c.input), follow, watch, forks, website: asSites });
       const queued = res.filter((r) => r.job && r.id);
       const listing = res.filter((r) => r.job && r.account);
       ui.set({ dialog: null });
@@ -55,7 +57,7 @@ function AddDialog({ text }) {
   const set = (patch) => setFollow((f) => ({ ...f, ...patch }));
   return html`<form class="dialog" role="dialog" aria-modal="true" aria-labelledby="add-title" onSubmit=${add}>
     <h2 id="add-title">Add projects</h2>
-    <label class="field"><span>Links, one per line</span>
+    <label class="field"><span>Links to projects or websites, one per line</span>
       <textarea id="add-links" ref=${box} rows="4" placeholder=${"https://github.com/owner/name\nhttps://gitlab.com/group/project\nhttps://github.com/someone (all of their projects)"}
         value=${value} onInput=${(e) => setValue(e.target.value)}
         onKeyDown=${(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) add(e); }}></textarea></label>
@@ -63,20 +65,23 @@ function AddDialog({ text }) {
       ${!c.ok ? html`<span class="bad">${Icon.x(12)}</span><span class="bad">${c.error}</span>`
         : c.account ? html`<span class="good">${Icon.check(12)}</span><span class="mono">${c.account.id}</span><span class="muted">every project of this ${c.account.kind} account${c.following ? " (followed already)" : ""}</span>`
         : c.in_library ? html`<span class="have">${Icon.alert(12)}</span><span class="mono">${c.id}</span><span class="have">already in the library</span>`
+        : c.website || asSites ? html`<span class="good">${Icon.globe(12)}</span><span class="mono">${c.url || c.input}</span><span class="muted">a website: its pages are saved and hosted here</span>`
         : html`<span class="good">${Icon.check(12)}</span><span class="mono">${c.id}</span><span class="muted">${c.kind || "server found when added"}</span>`}
     </li>`)}</ul>`}
     ${follow && html`<div class="options">
-      <div class="row">
+      ${(asSites || (sites.length > 0 && sites.length === good.length)) ? "" : html`<div class="row">
         <label class="check"><input type="checkbox" id="add-source" checked=${follow.source} onChange=${(e) => set({ source: e.target.checked })} /> The code (default branch)</label>
         <label class="check"><input type="checkbox" id="add-releases" checked=${follow.releases} onChange=${(e) => set({ releases: e.target.checked })} /> The newest release</label>
         <label class="check"><input type="checkbox" checked=${follow.prereleases} disabled=${!follow.releases} onChange=${(e) => set({ prereleases: e.target.checked })} /> including pre-releases</label>
       </div>
       <div class="row"><label class="field" style="flex:1"><span>Release files to keep</span>
-        <select id="add-files" value=${follow.files} disabled=${!follow.releases} onChange=${(e) => set({ files: e.target.value })}>${fileChoices().map(([k, l]) => html`<option value=${k}>${l}</option>`)}</select></label></div>
+        <select id="add-files" value=${follow.files} disabled=${!follow.releases} onChange=${(e) => set({ files: e.target.value })}>${fileChoices().map(([k, l]) => html`<option value=${k}>${l}</option>`)}</select></label></div>`}
       ${accounts.length > 0 && html`<div class="row">
         <label class="check"><input type="checkbox" id="add-watch" checked=${watch} onChange=${(e) => setWatch(e.target.checked)} /> Add their new projects at each check</label>
         <label class="check"><input type="checkbox" id="add-forks" checked=${forks} onChange=${(e) => setForks(e.target.checked)} /> Include their forks of other projects</label>
       </div>`}
+      <label class="check"><input type="checkbox" id="add-as-sites" checked=${asSites} onChange=${(e) => setAsSites(e.target.checked)} /> Save these as websites (their pages), not as code projects</label>
+      ${(sites.length > 0 || asSites) && html`<p class="hint">A website is saved as it's served: the pages under its address and the files they load, kept like versions of code and checked on the same schedule. Use it for sites with no repository, or to package a site to share.</p>`}
       <p class="hint">New versions are captured on the library's schedule (Settings), each beside the ones before.</p>
     </div>`}
     ${err && html`<p class="notice error">${err}</p>`}

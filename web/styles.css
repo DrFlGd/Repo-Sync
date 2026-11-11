@@ -315,3 +315,28 @@ dl.props dd a { color: var(--tool); }
   .nav-link { justify-content: center; }
   .sidebar .filters { display: none; }
 }
+
+/* A project's website (ui/site.js) */
+.site { display: grid; gap: 16px; }
+.site .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.site-head { background: var(--white); border: 1px solid var(--steel-2); padding: 14px 16px; display: grid; gap: 10px; }
+.site-kind { font-weight: 700; font-size: 16px; }
+.evidence { margin: 0; padding-left: 18px; font-size: 13px; color: var(--graphite); }
+.site-badge { display: inline-flex; align-items: center; gap: 4px; }
+.nowrap { white-space: nowrap; }
+table.list tr.expand > td { background: var(--steel); }
+table.list tr.warn td { color: var(--warn-ink); }
+#site-log td.path { max-width: 34rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+pre.log { max-height: 18rem; overflow: auto; font-family: var(--font-mono); font-size: 12px; background: var(--white); border: 1px solid var(--rule); padding: 8px; white-space: pre-wrap; }
+.site-settings, .export { display: grid; gap: 10px; font-size: 14px; }
+.site-settings .buttons, .export .buttons { display: flex; gap: 8px; justify-content: flex-end; }
+.export .row { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 10px 16px; }
+.field > span.addr { display: flex; align-items: center; gap: 4px; font-weight: 400; }
+.addr input { flex: 1 1 auto; width: 0; min-width: 0; }
+.compare { display: grid; gap: 8px; font-size: 14px; }
+.page-change { border-left: 3px solid var(--steel-2); padding-left: 8px; font-size: 13px; }
+.page-change .del { color: var(--danger); }
+.page-change .add { color: var(--ok); }
+.small-list { font-size: 12px; margin: 4px 0; padding-left: 18px; max-height: 14rem; overflow: auto; }
+#hosting { color: var(--tool); text-decoration: none; }

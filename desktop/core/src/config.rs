@@ -27,6 +27,10 @@ pub struct AppConfig {
     /// Tokens by host. Kept on this computer only, never in the library.
     #[serde(default)]
     pub tokens: Tokens,
+    /// The port the built-in web server hosts sites on (picked once, then kept
+    /// so sites keep their addresses and saved data).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site_port: Option<u16>,
 }
 
 impl AppConfig {

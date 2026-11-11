@@ -1,6 +1,6 @@
 //! GitHub (github.com, or GitHub Enterprise at <host>/api/v3).
 
-use super::{s, topics, Asset, Commit, Details, Release, Source, SourceRef};
+use super::{s, topics, Asset, Commit, Details, PagesInfo, Release, Source, SourceRef};
 use crate::http::{Client, Header};
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -82,6 +82,8 @@ impl Source for GitHub {
             archived: v["archived"].as_bool().unwrap_or(false),
             pushed_at: s(&v["pushed_at"]),
             created_at: s(&v["created_at"]),
+            has_pages: v["has_pages"].as_bool().unwrap_or(false),
+            pages: None,
         })
     }
 
@@ -116,6 +118,18 @@ impl Source for GitHub {
 
     fn branches(&self) -> Result<Vec<String>> {
         Ok(self.pages("/branches", 300, "the branches")?.iter().map(|b| s(&b["name"])).filter(|b| !b.is_empty()).collect())
+    }
+
+    fn pages(&self) -> Result<Option<PagesInfo>> {
+        let url = format!("{}/repos/{}/pages", self.api, self.r.path);
+        let Some(v) = self.client.json_opt(&url, &self.headers("application/vnd.github+json"), "GitHub", "how the site is published")? else { return Ok(None) };
+        Ok(Some(PagesInfo {
+            build_type: s(&v["build_type"]),
+            branch: s(&v["source"]["branch"]),
+            path: s(&v["source"]["path"]),
+            cname: s(&v["cname"]),
+            url: s(&v["html_url"]),
+        }))
     }
 
     fn asset_download(&self, asset: &Asset) -> (String, Vec<Header>) {

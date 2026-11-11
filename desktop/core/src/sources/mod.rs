@@ -25,6 +25,8 @@ pub enum Kind {
     GitHub,
     GitLab,
     Gitea,
+    /// A website saved as a project (no repository behind it).
+    Web,
 }
 
 impl Kind {
@@ -33,6 +35,7 @@ impl Kind {
             Kind::GitHub => "GitHub",
             Kind::GitLab => "GitLab",
             Kind::Gitea => "Gitea / Forgejo",
+            Kind::Web => "Website",
         }
     }
 }
@@ -58,8 +61,26 @@ impl SourceRef {
         self.path.rsplit_once('/').map(|(o, _)| o).unwrap_or("")
     }
     pub fn web_url(&self) -> String {
+        if self.kind == Kind::Web {
+            // "<domain>/<slug>": the start address itself is in the site settings
+            return format!("https://{}/", self.owner());
+        }
         format!("https://{}/{}", self.host, self.path)
     }
+}
+
+/// The library's name for a website saved as a project: "web/<domain>/<page>"
+/// ("https://agilancer.github.io/vectorclad/" is "web/agilancer.github.io/vectorclad").
+pub fn web_source(start: &url::Url) -> SourceRef {
+    let domain = start.host_str().unwrap_or("site").to_ascii_lowercase();
+    let domain = domain.strip_prefix("www.").unwrap_or(&domain).to_string();
+    let path = start.path().trim_matches('/');
+    let path = path.strip_suffix("index.html").unwrap_or(path).trim_matches('/');
+    let slug: String = path.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '-' }).collect();
+    let slug = slug.trim_matches(['-', '.']).chars().take(60).collect::<String>();
+    let slug = if slug.is_empty() { "home".to_string() } else { slug };
+    let port = start.port().map(|p| format!("-{p}")).unwrap_or_default();
+    SourceRef { kind: Kind::Web, host: "web".into(), path: format!("{domain}{port}/{slug}") }
 }
 
 /// A link as typed or pasted, read into a project and the kind of server when the
@@ -165,6 +186,26 @@ pub struct Details {
     /// When the server last saw a change (a push), ISO 8601.
     pub pushed_at: String,
     pub created_at: String,
+    /// The server says the project publishes a website (GitHub's has_pages).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_pages: bool,
+    /// How the website is published, when the server says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pages: Option<PagesInfo>,
+}
+
+/// How a project's website is published (GitHub's /pages).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PagesInfo {
+    /// "workflow" or "legacy" (from a branch).
+    pub build_type: String,
+    pub branch: String,
+    /// The folder on the branch ("/" or "/docs").
+    pub path: String,
+    pub cname: String,
+    /// The live address.
+    pub url: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -210,6 +251,10 @@ pub trait Source: Send + Sync {
     fn branches(&self) -> Result<Vec<String>>;
     /// Where to download one of a release's files.
     fn asset_download(&self, asset: &Asset) -> (String, Vec<Header>);
+    /// How the project's website is published, when the server says.
+    fn pages(&self) -> Result<Option<PagesInfo>> {
+        Ok(None)
+    }
 }
 
 /// Tokens by host ("github.com" -> "ghp_..."), from Settings.
@@ -237,6 +282,7 @@ fn api_of(kind: Kind, host: &str) -> String {
         Kind::GitHub => format!("https://{host}/api/v3"),
         Kind::GitLab => format!("https://{host}/api/v4"),
         Kind::Gitea => format!("https://{host}/api/v1"),
+        Kind::Web => String::new(),
     };
     api_base(host, default)
 }
@@ -252,6 +298,34 @@ pub fn open(r: &SourceRef, tokens: &Tokens, client: Arc<Client>) -> Box<dyn Sour
         Kind::GitHub => Box::new(github::GitHub::new(r.clone(), api, token, client)),
         Kind::GitLab => Box::new(gitlab::GitLab::new(r.clone(), api, token, client)),
         Kind::Gitea => Box::new(gitea::Gitea::new(r.clone(), api, token, client)),
+        Kind::Web => Box::new(NoRepo(r.clone())),
+    }
+}
+
+/// A website project's "source": there's no repository to ask.
+struct NoRepo(SourceRef);
+
+impl Source for NoRepo {
+    fn details(&self) -> Result<Details> {
+        Ok(Details { name: self.0.name().to_string(), web_url: self.0.web_url(), ..Default::default() })
+    }
+    fn commit(&self, _: &str) -> Result<Commit> {
+        bail!("a website has no code to download")
+    }
+    fn source_zip(&self, _: &str) -> (String, Vec<Header>) {
+        (String::new(), vec![])
+    }
+    fn latest_release(&self, _: bool) -> Result<Option<Release>> {
+        Ok(None)
+    }
+    fn releases(&self, _: usize) -> Result<Vec<Release>> {
+        Ok(vec![])
+    }
+    fn branches(&self) -> Result<Vec<String>> {
+        Ok(vec![])
+    }
+    fn asset_download(&self, _: &Asset) -> (String, Vec<Header>) {
+        (String::new(), vec![])
     }
 }
 
@@ -312,5 +386,9 @@ mod tests {
         assert_eq!(r.name(), "proj");
         assert_eq!(r.owner(), "group/sub");
         assert_eq!(r.web_url(), "https://gitlab.com/group/sub/proj");
+        let w = web_source(&url::Url::parse("https://www.Agilancer.github.io/vectorclad/").unwrap());
+        assert_eq!(w.id(), "web/agilancer.github.io/vectorclad");
+        assert_eq!(web_source(&url::Url::parse("http://localhost:8080/").unwrap()).id(), "web/localhost-8080/home");
+        assert_eq!(web_source(&url::Url::parse("https://x.org/docs/intro.html").unwrap()).path, "x.org/docs-intro.html");
     }
 }

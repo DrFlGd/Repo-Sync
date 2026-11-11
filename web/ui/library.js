@@ -6,6 +6,7 @@ import { ui, setPref, loadRepos } from "./state.js";
 import { Icon } from "./icons.js";
 import { openAdd } from "./dialogs.js";
 import { launch, checkAll } from "./actions.js";
+import { openSite } from "./site.js";
 import { bytes, ago, when, plural } from "../lib/format.js";
 
 const SORTS = [
@@ -36,6 +37,7 @@ function matches(r, f) {
     case "tag": return r.tags.includes(f.value);
     case "host": return r.host === f.value;
     case "status": return r.status === f.value;
+    case "site": return !!r.site;
     default: return true;
   }
 }
@@ -48,7 +50,10 @@ const statusBadge = (r) => {
 };
 
 function LaunchButton({ r }) {
-  if (!r.launchable) return null;
+  if (!r.launchable) {
+    return r.site ? html`<button type="button" class="small" title=${`Open the website (${r.site.kind_label})`}
+      onClick=${(e) => { e.preventDefault(); e.stopPropagation(); openSite(r.id); }}>${Icon.globe(13)} Open site</button>` : null;
+  }
   return html`<button type="button" class="small" title=${`Launch ${r.latest_release?.tag || "the latest release"}`}
     onClick=${(e) => { e.preventDefault(); e.stopPropagation(); launch(r.id); }}>${Icon.play(13)} Launch</button>`;
 }
@@ -57,8 +62,9 @@ function Card({ r }) {
   const open = () => { location.hash = `#/repo/${r.id}`; };
   return html`<article class="card" tabindex="0" data-id=${r.id} onClick=${open} onKeyDown=${(e) => e.key === "Enter" && open()}>
     <div class="card-top">
-      <div class="card-title"><h3>${r.name}</h3><div class="card-sub">${r.host} / ${r.owner}</div></div>
+      <div class="card-title"><h3>${r.name}</h3><div class="card-sub">${r.website ? r.owner : `${r.host} / ${r.owner}`}</div></div>
       ${statusBadge(r)}
+      ${r.site && !statusBadge(r) && html`<span class="badge plain site-badge" title=${r.site.kind_label}>${Icon.globe(11)} ${r.website ? "Website" : "Site"}</span>`}
     </div>
     <p class="card-desc">${r.description || html`<span class="muted">No description</span>`}</p>
     ${r.match === "readme" && html`<div class="match">Found in the readme</div>`}
@@ -67,7 +73,7 @@ function Card({ r }) {
       ${r.language && html`<span>${Icon.code(12)}${r.language}</span>`}
       ${r.stars > 0 && html`<span title="Stars">${Icon.star(12)}${r.stars.toLocaleString()}</span>`}
       <span title="On disk, every version">${bytes(r.bytes)}</span>
-      <span title="Versions of the code kept">${plural(r.snapshots, "version")}</span>
+      <span title=${r.website ? "Captures of the website kept" : "Versions of the code kept"}>${plural(r.snapshots, r.website ? "capture" : "version")}</span>
     </div>
     <div class="card-foot">
       <span class="when" title=${`Updated upstream ${when(r.pushed_at)}\nLast checked ${when(r.last_checked) || "never"}`}>
@@ -129,7 +135,7 @@ export function LibraryPage() {
   const list = useMemo(() => repos.filter((r) => matches(r, filter)).sort(sorter(sort)), [repos, filter, sort]);
   const have = new Set(repos.map((r) => r.id));
   const pending = [jobs.current && { ...jobs.current.job, stage: jobs.current.stage }, ...(jobs.queued || [])]
-    .filter((j) => j && j.type === "add" && !have.has(j.repo));
+    .filter((j) => j && (j.type === "add" || j.type === "add_website") && !have.has(j.repo));
   const empty = totals.count === 0 && pending.length === 0;
   return html`<div class="cmdbar">
       <h1>Library</h1>

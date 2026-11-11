@@ -92,6 +92,7 @@ pub fn projects(a: &Account, tokens: &Tokens, client: &Client) -> Result<Vec<Lis
     };
     let name = percent_encode(&a.name);
     let list = match a.kind {
+        Kind::Web => anyhow::bail!("a website has no account"),
         Kind::GitHub => all(&format!("{api}/users/{name}/repos?type=owner&sort=full_name"), 100)?,
         Kind::Gitea => match all(&format!("{api}/users/{name}/repos"), 50)? {
             Some(l) => Some(l),
