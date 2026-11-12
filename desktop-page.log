@@ -1,0 +1,152 @@
+ok   an empty library offers to add a project
+ok   the Add dialog reads each link
+ok   a line that isn't a link is pointed out
+ok   three links can be added
+ok   both projects are added and captured
+ok   the jobs finish
+ok   the project that doesn't exist isn't added
+ok   each project has a folder with repo.json
+ok   a failed add leaves no folder behind
+ok   the code and the latest release were captured
+ok   the code is unpacked into source/<version>/
+ok   the release's files are in releases/<tag>/
+ok   the release's notes are kept beside its files
+ok   the card shows the latest release
+ok   Activity says why a project couldn't be added
+ok   search finds words in readmes
+ok   a readme match is labelled
+ok   clearing the search shows everything
+ok   the list view has a row per project
+ok   the readme is shown
+ok   pictures in the readme come from the captured files
+ok   the readme's picture loads offline
+ok   scripts in a readme don't run
+ok   relative links in a readme lead to the project's site
+ok   details show Size on disk
+ok   details show Added
+ok   details show Last captured
+ok   details show Last checked
+ok   details show Updated upstream
+ok   details show Latest release
+ok   details show MIT
+ok   Launch starts the latest release's program
+ok   Launch offers only what runs on this computer
+ok   Check now captures the new version and release
+ok   the earlier version of the code is kept
+ok   the earlier release is kept beside the new one
+ok   Code versions lists both versions
+ok   Releases lists both releases
+ok   a release's notes are shown
+ok   Launch now starts the newer release
+ok   the newer release is launched
+ok   a check with nothing new says it's up to date
+ok   nothing is captured twice
+ok   the schedule captures a change by itself
+ok   scheduled checks finish
+ok   Activity records scheduled checks
+ok   every release on the server is listed
+ok   kept releases are ticked
+ok   a pre-release is marked
+ok   ticking a release downloads it, in publish order
+ok   the picked release's files are kept
+ok   the picked release shows as kept
+ok   an older release picked later doesn't replace the newest for Launch
+ok   clearing a tick deletes that release
+ok   the cleared release is unticked
+ok   pre-releases can be hidden
+ok   moving to another project shows that project
+ok   follow settings are saved in repo.json
+ok   the files choice says what's skipped
+ok   the branch list offers the project's branches beside the default
+ok   a branch can be picked from the list
+ok   the default branch can be picked again
+ok   a GitLab project says where it's from
+ok   a tag is saved
+ok   the GitLab project's new release is captured
+ok   files for another system are skipped when asked
+ok   files for any system are kept
+ok   a tag in the menu narrows the library
+ok   a version can be deleted
+ok   its folder is gone
+ok   removing a project deletes its folder
+ok   the removed project leaves the library
+ok   the library folder can be changed
+ok   a new library folder is set up
+ok   the first library opens again with its project
+ok   a link to a user is read as an account
+ok   an account is followed, and its forks left out, unless asked
+ok   every project of the account is added
+ok   adding the account's projects finishes
+ok   its forks are left out
+ok   the account is followed
+ok   a followed account's new project is added at the next check
+ok   the checks finish
+ok   a project removed by hand isn't added back
+ok   an account can be unfollowed
+ok   a project's limits to keep are saved
+ok   a release ticked by hand is marked as picked
+ok   the picked release is downloaded
+ok   only the newest release is kept, beside the picked one
+ok   only the newest version of the code is kept
+ok   older releases' folders are deleted, the picked one stays
+ok   Activity says what the limits deleted
+ok   the library's limits are saved
+ok   a project with a website is added
+ok   its files from other servers are saved after the capture
+ok   the version is found to be a website, served under /vectorclad/
+ok   a module the import map names is saved
+ok   Google Fonts' font files are saved, as a browser gets them
+ok   the saved files are kept once for the library
+ok   the card says the project has a website
+ok   the Website tab says what was found and why
+ok   the version's saved files are listed
+ok   Open site opens the site's own address in the browser
+ok   the status bar says the server is running
+ok   the site runs from the library: three.js and its add-ons load from the saved copies
+ok   the site's own files load
+ok   nothing was fetched from the internet []
+ok   the site's address without its path leads to it
+ok   files the published site doesn't hold aren't served
+ok   a page on the internet can't read a hosted site
+ok   the server only answers to its own names
+ok   each version has an address of its own
+ok   the Website tab lists the site's requests
+ok   the web font is served from its saved copy
+ok   the branch a site is published to is captured too
+ok   the published site is captured
+ok   a folder's address gets its slash, as on GitHub Pages
+ok   the site is served from its published branch
+ok   a web address is read as a website
+ok   a website is added as a project
+ok   the website is captured
+ok   the website's pages are saved at their addresses
+ok   pages robots.txt asks robots to leave are left
+ok   the website is named by its title
+ok   the saved website runs offline, its CDN files saved too
+ok   the saved website's links stay in the copy
+ok   a page the capture missed is saved while browsing
+ok   a website has no releases or Launch
+ok   capturing again keeps a new capture beside the first
+ok   the new capture is finished
+ok   capturing an unchanged website finishes
+ok   a capture the same as the one before isn't kept
+ok   two captures can be compared, page by page
+ok   a site that's built when published is added
+ok   it's captured
+ok   a build command can be set
+ok   building asks first: it runs the project's own code
+ok   the site is built in a copy of the version
+ok   the build finishes
+ok   the built site is served
+ok   a site is exported as a folder
+ok   the export finishes
+ok   the export points at its own copies of the CDN files
+ok   the export holds the saved files, .nojekyll and a Pages workflow
+ok   a website can be exported as a ZIP
+ok   the ZIP is made
+ok   the Websites page lists every hosted site
+ok   the theme can be dark
+ok   a narrow window doesn't scroll sideways
+ok   no errors in the page []
+
+all passed
