@@ -362,6 +362,8 @@ try:
 
         # ---- following, tags --------------------------------------------------------
         page.goto(BASE + "/#/repo/gitlab.com/demo/lab")
+        # until the next project is read, the last one's settings mustn't be on show (a change there went to the wrong project)
+        wait_for(lambda: "gitlab.com" in page.inner_text(".repo-head .crumbs"), "moving to another project shows that project", 10)
         page.wait_for_selector("#follow")
         page.select_option("#follow select[aria-label='Release files to keep']", "this-computer")
         page.select_option("#follow-every", "168")

@@ -366,10 +366,18 @@ export function RepoPage({ id, tab: asked }) {
   const [repo, setRepo] = useState(null);
   const [err, setErr] = useState("");
   const [snapshot, setSnapshot] = useState(null);
-  const reload = () => api("repo", { id }).then((r) => { setRepo(r); setErr(""); }).catch((e) => setErr(errText(e)));
+  // a project read for the page before is dropped when it comes back late
+  const current = useRef(id);
+  current.current = id;
+  const reload = () => api("repo", { id }).then((r) => { if (current.current === id) { setRepo(r); setErr(""); } }).catch((e) => { if (current.current === id) setErr(errText(e)); });
   // read the project again whenever a check changes it
   const stamp = summary ? `${summary.last_checked}|${summary.status}|${summary.snapshots}|${summary.releases}|${summary.pages_versions}|${summary.live_versions}` : "";
   useEffect(() => { reload(); }, [id, stamp]);
+  // moving to another project: the last one's page (and its settings) isn't shown meanwhile
+  if (repo && repo.summary.id !== id) {
+    return err ? html`<div class="page"><p class="notice error">${err}</p><a class="button" href="#/">${Icon.back(14)} Back to the library</a></div>`
+      : html`<div class="page"><p class="muted">Reading…</p></div>`;
+  }
   if (err && !repo) {
     return html`<div class="page"><p class="notice error">${err}</p><a class="button" href="#/">${Icon.back(14)} Back to the library</a></div>`;
   }
