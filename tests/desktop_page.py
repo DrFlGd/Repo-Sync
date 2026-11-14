@@ -320,6 +320,13 @@ try:
         page.wait_for_selector("#releases .notes h2")
         check("What's new in v1.1" in page.inner_text("#releases .notes"), "a release's notes are shown")
         page.screenshot(path=str(a.out / "07-releases.png"))
+        older = page.locator("#releases .release[data-release='v1.0']")
+        check(older.locator(".release-head [data-act='folder']").count() == 1 and older.locator(".release-head [data-act='launch']").count() == 0, "a release's head opens its folder, it doesn't launch")
+        starts = [older.locator("tr", has=page.locator(f"td.mono:text-is('{n}')")).locator("[data-act='launch']").count() for n in (mine, other)]
+        check(starts == [1, 0], "a release's file that runs on this computer can be started from its row, another system's can't")
+        (lib / "github.com/demo/tool/releases/v1.0/launched.txt").unlink()
+        older.locator("tr", has=page.locator(f"td.mono:text-is('{mine}')")).locator("[data-act='launch']").click()
+        wait_for((lib / "github.com/demo/tool/releases/v1.0/launched.txt").is_file, "starting a file from its row runs it")
         check("v1.1" in page.inner_text("#launch"), "Launch now starts the newer release")
         page.click("#launch")
         wait_for((lib / "github.com/demo/tool/releases/v1.1/launched.txt").is_file, "the newer release is launched")

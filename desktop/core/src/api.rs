@@ -467,6 +467,18 @@ impl App {
             v["summary"] = self.summary(l, r);
             v["path"] = json!(l.folder_of(id).display().to_string());
             v["web_url"] = json!(if r.details.web_url.is_empty() { r.source.web_url() } else { r.details.web_url.clone() });
+            // what each kept release file does when started on this computer, for its own Launch
+            let releases = l.folder_of(id).join("releases");
+            if let Some(list) = v["releases"].as_array_mut() {
+                for rel in list {
+                    let folder = rel["folder"].as_str().unwrap_or("").to_string();
+                    for a in rel["assets"].as_array_mut().into_iter().flatten() {
+                        let file = a["file"].as_str().unwrap_or("");
+                        let kind = if file.is_empty() { None } else { launch::launchable(&releases.join(&folder).join(file)) };
+                        a["launch"] = json!(kind);
+                    }
+                }
+            }
             Ok(v)
         })
     }

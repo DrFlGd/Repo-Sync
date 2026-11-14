@@ -170,6 +170,22 @@ pub fn candidates(folder: &Path, project: &str) -> Vec<Candidate> {
     out
 }
 
+/// What starting one release file does on this computer: "program", "installer",
+/// "script" or "archive" (a build for this system, unpacked then started), or None
+/// when it doesn't run here (another system's file, a checksum, notes…).
+pub fn launchable(path: &Path) -> Option<&'static str> {
+    let name = path.file_name()?.to_string_lossy().to_ascii_lowercase();
+    if !for_this_computer(&name) {
+        return None;
+    }
+    let kind = kind_of(path, this_os())?;
+    // only an archive that says it's a build (for a system, or portable) is a program's
+    if kind == "archive" && systems_of(&name).is_empty() && !name.contains("portable") {
+        return None;
+    }
+    Some(kind)
+}
+
 /// Where an archive in a release is unpacked: a folder beside it, named after it.
 pub fn unpacked_dir(archive_path: &Path) -> PathBuf {
     let name = archive_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -314,6 +330,34 @@ mod tests {
         assert!(!for_this_computer("glab_1.126.0_freebsd_amd64.tar.gz"));
         assert!(for_this_computer("glab_1.126.0_source.tar.gz"));
         assert!(for_this_computer("checksums.txt"));
+    }
+
+    #[test]
+    fn launchable_is_only_what_runs_here() {
+        let dir = std::env::temp_dir().join(format!("reposync-launchable-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let at = |n: &str| {
+            std::fs::write(dir.join(n), b"x").unwrap();
+            launchable(&dir.join(n))
+        };
+        // the release in the screenshot: an Electron app for three systems
+        assert_eq!(at("latest.yml"), None);
+        assert_eq!(at("OpenBurn-0.11.0.dmg.blockmap"), None);
+        assert_eq!(at("OpenBurn-0.11.0-arm64-mac.zip"), None);
+        assert_eq!(at("notes.zip"), None, "an archive that isn't a build isn't started");
+        if cfg!(windows) {
+            assert_eq!(at("OpenBurn-Setup-0.11.0.exe"), Some("installer"));
+            assert_eq!(at("OpenBurn-0.11.0-win-x64.zip"), Some("archive"));
+            assert_eq!(at("OpenBurn-0.11.0.AppImage"), None);
+            assert_eq!(at("OpenBurn-0.11.0.dmg"), None);
+        } else if cfg!(target_os = "linux") {
+            assert_eq!(at("OpenBurn-0.11.0.AppImage"), Some("program"));
+            assert_eq!(at("openburn_0.11.0_amd64.deb"), Some("installer"));
+            assert_eq!(at("OpenBurn-Setup-0.11.0.exe"), None);
+            assert_eq!(at("OpenBurn-0.11.0.dmg"), None);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
