@@ -162,6 +162,19 @@ function Available({ repo, reload, del }) {
   </section>`;
 }
 
+// what starting a release file does, by its kind (see launch::launchable)
+const START = {
+  program: ["Launch", "Start this program"],
+  archive: ["Launch", "Unpack this build beside it and start its program"],
+  installer: ["Install", "Start this installer"],
+  script: ["Run", "Run this script"],
+};
+
+function StartFile({ id, folder, a }) {
+  const [label, title] = START[a.launch] || START.program;
+  return html`<button type="button" class="small" data-act="launch" title=${title} onClick=${() => launch(id, { folder, file: a.file })}>${Icon.play(13)} ${label}</button>`;
+}
+
 function Releases({ repo, reload }) {
   const id = repo.summary.id;
   const [open, setOpen] = useState(() => new Set());
@@ -183,8 +196,7 @@ function Releases({ repo, reload }) {
       ${r.prerelease && html`<span class="badge warn">pre-release</span>`}
       ${r.picked && html`<span class="badge plain" title="Ticked in the list above: kept whatever the limit on releases">picked</span>`}
       <span class="spacer" style="flex:1"></span>
-      <button type="button" class="small" title="Start this release's program" disabled=${!r.assets.some((a) => a.file)} onClick=${() => launch(id, { folder: r.folder })}>${Icon.play(13)} Launch</button>
-      <button type="button" class="ghost small" title="Open this release's folder" onClick=${() => openFolder(id, `releases/${r.folder}`)}>${Icon.folder(14)}</button>
+      <button type="button" class="small" data-act="folder" title="Open this release's folder" onClick=${() => openFolder(id, `releases/${r.folder}`)}>${Icon.folder(14)} Open folder</button>
       ${r.web_url && html`<button type="button" class="ghost small" title="Open the release's page" onClick=${() => openUrl(r.web_url)}>${Icon.external(14)}</button>`}
       <button type="button" class="ghost small danger" title="Delete this release" onClick=${() => del(r)}>${Icon.trash(14)}</button>
     </div>
@@ -193,7 +205,8 @@ function Releases({ repo, reload }) {
       <tbody>${r.assets.map((a) => html`<tr key=${a.name}>
         <td class="mono">${a.name}</td>
         <td>${a.file ? html`<span class="badge ok">kept</span>` : html`<span class="badge plain" title=${a.skipped}>not downloaded: ${a.skipped}</span>`}</td>
-        <td class="num">${a.bytes ? bytes(a.bytes) : ""}</td></tr>`)}</tbody></table>`
+        <td class="num">${a.bytes ? bytes(a.bytes) : ""}</td>
+        <td class="act">${a.launch && html`<${StartFile} id=${id} folder=${r.folder} a=${a} />`}</td></tr>`)}</tbody></table>`
       : html`<p class="hint">This release has no files of its own, only its notes.</p>`}
     <div><button type="button" class="ghost small" aria-expanded=${open.has(r.folder) ? "true" : "false"} onClick=${() => toggle(r.folder)}>${open.has(r.folder) ? "Hide the notes" : "Show the notes"}</button></div>
     ${open.has(r.folder) && html`<${Notes} id=${id} folder=${r.folder} />`}

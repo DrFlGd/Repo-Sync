@@ -61,6 +61,13 @@ Keep running in the tray so checks happen with the window closed; full-text sear
 
 ## Unreleased
 
+- **Each release file that runs on this computer has its own button** on the Releases tab: Launch for a program (or a build to unpack), Install for an installer, Run for a script. Files for other systems, checksums and update manifests have none. Jerred asked for this: one Launch for a release built for several systems didn't say what it would start.
+- A release's own Launch button is now **Open folder**. The Launch button at the top of a project's page still starts the best program for this computer from the newest release.
+
+For agents: `launch::launchable(path)` says what starting one release file does here; `repo` adds it to each kept release file as `launch` (null when it doesn't run here).
+
+## 0.2.0 (2026-11-12)
+
 **Hosting websites (0.2).** Jerred asked for built-in hosting of repos that would normally use GitHub Pages, as general as possible, with Agilancer/vectorclad as the example:
 
 - **Open a project's website from the library.** A project that publishes a site (a GitHub Pages workflow, a `gh-pages` branch, a `docs/` folder, GitLab Pages…) gets a Website tab and an **Open site** button: the site opens in your browser at its own address on this computer, such as `http://vectorclad.agilancer.localhost:<port>/vectorclad/`, served as GitHub Pages serves it (folders, `404.html`, clean addresses, `_redirects`). Each version has an address of its own too, so you can open last month's.
@@ -74,6 +81,8 @@ Keep running in the tray so checks happen with the window closed; full-text sear
 - Fixed: moving from one project's page to another could briefly show the first project's settings, so a change made in that moment was saved to the wrong project.
 
 For agents (0.2): the design is docs/PLAN.md section 10. New `desktop/core/src/sites/` (`detect` what a version holds, `router` Pages' rules, `server` tiny_http on 127.0.0.1 and ::1 with one origin per site, `vendor` CDN files into `_library/sites/blobs` with a lock per version, `rewrite` addresses as served, `mirror` captures of websites, `build` local builds, `export`, `scan` reading HTML/JS/CSS, `mime`) and `api_site.rs` (the `site_*` commands, the `site` job, `add_website`). `repo.json` gained `pages`, `live` (versions like `snapshots`), `site` (settings), `snapshots[].site` (what was detected), `follow.site_branch`/`live`, `details.has_pages`/`pages`; website projects are `source.kind: "web"`, id `web/<domain>/<page>`. `REPOSYNC_VENDOR` points CDN hosts at `tests/cdn_mock.py`; the site server's port is `site_port` in this computer's config. The main window no longer counts `*.localhost` as its own (sites open in the browser). In the acceptance test, wait for a card to change after a job rather than reading it at once: the page reads the jobs once a second, so a card can lag the server (this failed on Windows CI).
+
+## 0.1.1 (2026-10-29)
 
 After testing 0.1.0 on terrain-press, Jerred asked for these:
 

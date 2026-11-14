@@ -201,6 +201,7 @@ table.list td { padding: 8px 10px; border-bottom: 1px solid var(--rule); vertica
 table.list tr.row { cursor: pointer; }
 table.list tr.row:hover td { background: var(--sel); }
 table.list td.num, table.list th.num { text-align: right; font-family: var(--font-mono); font-size: 13px; white-space: nowrap; }
+table.list td.act { width: 1%; text-align: right; white-space: nowrap; padding-top: 4px; padding-bottom: 4px; }
 table.list td.date { font-family: var(--font-mono); font-size: 12.5px; white-space: nowrap; color: var(--graphite); }
 table.list .name { font-weight: 700; }
 table.list .sub { font-family: var(--font-mono); font-size: 12px; color: var(--graphite); }
